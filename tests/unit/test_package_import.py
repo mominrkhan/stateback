@@ -17,6 +17,7 @@ def test_import_stateback_version() -> None:
 
 def test_import_does_not_open_sockets_or_connect_to_postgres() -> None:
     sys.modules.pop("stateback", None)
+    sys.modules.pop("stateback.domain", None)
     with (
         patch(
             "socket.socket",
@@ -32,4 +33,6 @@ def test_import_does_not_open_sockets_or_connect_to_postgres() -> None:
         ),
     ):
         module = importlib.import_module("stateback")
+        domain = importlib.import_module("stateback.domain")
     assert module.__version__ == "0.0.0"
+    assert domain.CONTRACT_VERSION == "v1"
