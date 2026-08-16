@@ -1,0 +1,63 @@
+name: quality
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+env:
+  STATEBACK_POSTGRES_HOST: 127.0.0.1
+  STATEBACK_POSTGRES_PORT: "5432"
+  STATEBACK_POSTGRES_DB: stateback
+  STATEBACK_POSTGRES_USER: stateback
+  STATEBACK_POSTGRES_PASSWORD: stateback_dev_only
+  STATEBACK_DATABASE_URL: postgresql+psycopg://stateback:stateback_dev_only@127.0.0.1:5432/stateback
+  STATEBACK_NATS_URL: nats://127.0.0.1:4222
+  STATEBACK_NATS_MONITOR_URL: http://127.0.0.1:8222
+
+jobs:
+  static:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          version: "0.12.5"
+          python-version: "3.12"
+          enable-cache: true
+      - name: Install
+        run: uv sync --frozen
+      - name: Ruff check
+        run: uv run ruff check .
+      - name: Ruff format
+        run: uv run ruff format --check .
+      - name: mypy
+        run: uv run mypy src tests
+      - name: Unit tests
+        run: uv run pytest -m unit
+      - name: Whitespace
+        run: git diff --check
+
+  integration:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          version: "0.12.5"
+          python-version: "3.12"
+          enable-cache: true
+      - name: Install
+        run: uv sync --frozen
+      - name: Start local infrastructure
+        run: docker compose up -d --wait
+      - name: Integration tests
+        env:
+          STATEBACK_RUN_INTEGRATION: "1"
+        run: uv run pytest -m integration
+      - name: Alembic upgrade head
+        run: uv run alembic upgrade head

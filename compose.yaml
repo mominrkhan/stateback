@@ -1,0 +1,51 @@
+name: stateback
+
+services:
+  postgres:
+    image: postgres:16.15
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: stateback
+      POSTGRES_PASSWORD: stateback_dev_only
+      POSTGRES_DB: stateback
+    ports:
+      - "5432:5432"
+    volumes:
+      - stateback_pgdata:/var/lib/postgresql/data
+    networks:
+      - stateback
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U stateback -d stateback"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+
+  nats:
+    image: nats:2.12.6-alpine
+    restart: unless-stopped
+    command: ["-js", "-sd", "/data", "-m", "8222"]
+    ports:
+      - "4222:4222"
+      - "8222:8222"
+    volumes:
+      - stateback_nats:/data
+    networks:
+      - stateback
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8222/healthz || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+
+networks:
+  stateback:
+    name: stateback
+    driver: bridge
+
+volumes:
+  stateback_pgdata:
+    name: stateback_pgdata
+  stateback_nats:
+    name: stateback_nats
