@@ -1,8 +1,8 @@
 """Stateback package root.
 
-Phase 4 adds a provider capability boundary (`stateback.providers`) with a
-deterministic reference adapter. This module MUST NOT open sockets, connect
-to PostgreSQL, or import providers.
+Phase 5 adds a synchronous execution kernel (`stateback.runtime`) and a
+minimum policy boundary (`stateback.policy`). This module MUST NOT open
+sockets, connect to PostgreSQL, or import runtime/policy/providers.
 """
 
 __version__ = "0.0.0"

@@ -39,12 +39,16 @@ def test_import_does_not_open_sockets_or_connect_to_postgres() -> None:
         transitions = importlib.import_module("stateback.transitions")
         providers = importlib.import_module("stateback.providers")
         adapter = importlib.import_module("stateback.providers.reference.adapter")
+        policy = importlib.import_module("stateback.policy")
+        runtime = importlib.import_module("stateback.runtime")
     assert module.__version__ == "0.0.0"
     assert domain.CONTRACT_VERSION == "v1"
     assert hasattr(persistence, "create_engine_from_env")
     assert hasattr(transitions, "TransitionService")
     assert hasattr(providers, "CapabilityRegistry")
     assert hasattr(adapter, "ReferenceAdapter")
+    assert hasattr(policy, "AllowAllPolicyEngine")
+    assert hasattr(runtime, "SynchronousRuntime")
 
 
 def test_import_persistence_does_not_create_engine(
