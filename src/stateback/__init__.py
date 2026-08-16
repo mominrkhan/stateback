@@ -1,7 +1,7 @@
 """Stateback package root.
 
-Phase 1 adds a pure domain model under `stateback.domain`. This module MUST NOT
-open sockets, connect to PostgreSQL, or call providers.
+Phase 2 adds PostgreSQL journal persistence under `stateback.persistence`.
+This module MUST NOT open sockets, connect to PostgreSQL, or call providers.
 """
 
 __version__ = "0.0.0"

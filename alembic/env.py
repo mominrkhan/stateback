@@ -6,6 +6,8 @@ from logging.config import fileConfig
 from alembic import context
 from sqlalchemy import engine_from_config, pool
 
+from stateback.persistence.models import Base
+
 config = context.config
 
 if config.config_file_name is not None:
@@ -16,8 +18,7 @@ if not database_url:
     raise RuntimeError("STATEBACK_DATABASE_URL is required")
 config.set_main_option("sqlalchemy.url", database_url)
 
-# Phase 0 has no SQLAlchemy models. Phase 2 owns metadata.
-target_metadata = None
+target_metadata = Base.metadata
 
 
 def run_migrations_offline() -> None:

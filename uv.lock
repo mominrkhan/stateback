@@ -319,6 +319,7 @@ source = { editable = "." }
 dependencies = [
     { name = "alembic" },
     { name = "psycopg", extra = ["binary"] },
+    { name = "sqlalchemy" },
 ]
 
 [package.dev-dependencies]
@@ -332,6 +333,7 @@ dev = [
 requires-dist = [
     { name = "alembic", specifier = "==1.19.1" },
     { name = "psycopg", extras = ["binary"], specifier = "==3.3.4" },
+    { name = "sqlalchemy", specifier = "==2.0.52" },
 ]
 
 [package.metadata.requires-dev]

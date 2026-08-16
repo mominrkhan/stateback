@@ -7,6 +7,7 @@ requires-python = ">=3.12,<3.13"
 dependencies = [
     "alembic==1.19.1",
     "psycopg[binary]==3.3.4",
+    "sqlalchemy==2.0.52",
 ]
 
 [build-system]
@@ -63,6 +64,6 @@ markers = [
     "integration: tests that require local PostgreSQL or NATS",
     "postgres: tests that require PostgreSQL",
     "nats: tests that require NATS JetStream",
-    "failure: reserved for later phases; do not use in Phase 1",
+    "failure: reserved for later phases; do not use in Phase 2",
     "contract: canonical contract serialization and enum tests",
 ]

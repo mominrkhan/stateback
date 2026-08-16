@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from pathlib import Path
 
+import psycopg
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -31,3 +33,48 @@ def test_alembic_current_is_runnable() -> None:
         cwd=REPO_ROOT,
     )
     assert result.returncode == 0, result.stderr
+
+
+def _connect() -> psycopg.Connection[tuple[object, ...]]:
+    return psycopg.connect(
+        host=os.environ["STATEBACK_POSTGRES_HOST"],
+        port=os.environ["STATEBACK_POSTGRES_PORT"],
+        dbname=os.environ["STATEBACK_POSTGRES_DB"],
+        user=os.environ["STATEBACK_POSTGRES_USER"],
+        password=os.environ["STATEBACK_POSTGRES_PASSWORD"],
+    )
+
+
+def test_alembic_head_is_0001_journal_v1() -> None:
+    with _connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT version_num FROM alembic_version")
+            row = cur.fetchone()
+    assert row is not None
+    assert row[0] == "0001_journal_v1"
+
+
+def test_alembic_upgrade_creates_journal_tables() -> None:
+    with _connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT table_name FROM information_schema.tables
+                WHERE table_schema = 'public' AND table_type = 'BASE TABLE'
+                ORDER BY table_name
+                """
+            )
+            names = [str(item[0]) for item in cur.fetchall()]
+    assert names == [
+        "alembic_version",
+        "approvals",
+        "audit_events",
+        "compensation_attempts",
+        "compensations",
+        "execution_attempts",
+        "operations",
+        "outbox_events",
+        "policy_decisions",
+        "reconciliation_decisions",
+        "verifications",
+    ]
