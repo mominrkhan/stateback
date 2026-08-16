@@ -21,6 +21,7 @@ from stateback.domain.capability import (
     ProviderExecutionContext,
     ProviderExecutionRequest,
     ProviderKeySemantics,
+    ValidationResult,
     VerificationEvidence,
 )
 from stateback.domain.compensation import (
@@ -161,6 +162,7 @@ __all__ = [
     "TransitionDecision",
     "TransitionVerdict",
     "UtcTimestamp",
+    "ValidationResult",
     "VerificationEvidence",
     "VerificationMode",
     "VerificationRequest",

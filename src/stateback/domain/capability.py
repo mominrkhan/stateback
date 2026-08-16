@@ -8,6 +8,7 @@ from stateback.domain.enums import (
     CONTRACT_VERSION,
     CompensationKind,
     EffectOutcome,
+    ErrorKind,
     IdempotencyMode,
     Mutability,
     RiskLevel,
@@ -96,6 +97,14 @@ _COMP_EVIDENCE_FIELDS = frozenset(
         "evidence",
         "error",
         "external_operation_id",
+    }
+)
+_VALIDATION_RESULT_FIELDS = frozenset({"accepted", "error"})
+_VALIDATION_ERROR_KINDS = frozenset(
+    {
+        ErrorKind.VALIDATION,
+        ErrorKind.UNSUPPORTED_CAPABILITY,
+        ErrorKind.AUTHENTICATION,
     }
 )
 
@@ -555,4 +564,48 @@ class CompensationEvidence:
                 optional_key(data, "external_operation_id"),
                 field="CompensationEvidence.external_operation_id",
             ),
+        )
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class ValidationResult:
+    accepted: bool
+    error: NormalizedError | None
+
+    def __post_init__(self) -> None:
+        if self.accepted and self.error is not None:
+            raise ContractValidationError(
+                "illegal_combination",
+                "accepted ValidationResult must not include an error",
+            )
+        if not self.accepted and self.error is None:
+            raise ContractValidationError(
+                "illegal_combination",
+                "rejected ValidationResult requires an error",
+            )
+        if self.error is not None and self.error.kind not in _VALIDATION_ERROR_KINDS:
+            raise ContractValidationError(
+                "illegal_combination",
+                "ValidationResult.error.kind must be VALIDATION, "
+                "UNSUPPORTED_CAPABILITY, or AUTHENTICATION",
+            )
+
+    def to_wire(self) -> dict[str, object]:
+        return {
+            "accepted": self.accepted,
+            "error": None if self.error is None else self.error.to_wire(),
+        }
+
+    @classmethod
+    def from_wire(cls, raw: object) -> ValidationResult:
+        data = require_mapping(raw, type_name="ValidationResult")
+        reject_unknown_keys(
+            data, _VALIDATION_RESULT_FIELDS, type_name="ValidationResult"
+        )
+        return cls(
+            accepted=parse_bool(
+                require_key(data, "accepted", type_name="ValidationResult"),
+                field="ValidationResult.accepted",
+            ),
+            error=parse_optional_error(optional_key(data, "error")),
         )
