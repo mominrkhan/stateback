@@ -248,6 +248,7 @@ class ManualSafeRetry(_OperationCommand):
 class CompensationApplied(_OperationCommand):
     completed_compensation_attempt: CompensationAttempt
     compensation_result_audit_event_id: OpaqueId
+    verification_result: VerificationResult | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -255,17 +256,20 @@ class CompensationOutcomeUnknown(_OperationCommand):
     completed_compensation_attempt: CompensationAttempt | None
     compensation_result_audit_event_id: OpaqueId
     outbox_event_id: OpaqueId
+    verification_result: VerificationResult | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class CompensationOutcomeFailed(_OperationCommand):
     completed_compensation_attempt: CompensationAttempt
     compensation_result_audit_event_id: OpaqueId
+    verification_result: VerificationResult | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class CompensationEscalate(_OperationCommand):
     manual_audit_event_id: OpaqueId
+    verification_result: VerificationResult | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -276,16 +280,19 @@ class CompensationUnknownRetry(_OperationCommand):
 @dataclass(frozen=True, slots=True, kw_only=True)
 class CompensationUnknownApplied(_OperationCommand):
     completed_compensation_attempt: CompensationAttempt
+    verification_result: VerificationResult | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class CompensationUnknownFailed(_OperationCommand):
     completed_compensation_attempt: CompensationAttempt
+    verification_result: VerificationResult | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class CompensationUnknownEscalate(_OperationCommand):
     manual_audit_event_id: OpaqueId
+    verification_result: VerificationResult | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -311,6 +318,58 @@ class ClaimCompensationExecution:
     correlation_id: str | None
     reason_code: str
     attempt_audit_event_id: OpaqueId
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class StartCompensationVerification:
+    kind: CompensationProgressKind
+    operation_id: OpaqueId
+    expected_operation_version: int
+    compensation_id: OpaqueId
+    expected_compensation_version: int
+    completed_compensation_attempt: CompensationAttempt | None
+    verification_request: VerificationRequest
+    occurred_at: UtcTimestamp
+    actor: PrincipalRef | None
+    correlation_id: str | None
+    reason_code: str
+    attempt_audit_event_id: OpaqueId | None
+    verification_audit_event_id: OpaqueId
+    outbox_event_id: OpaqueId
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class ClaimCompensationRetryAttempt:
+    kind: CompensationProgressKind
+    operation_id: OpaqueId
+    expected_operation_version: int
+    compensation_id: OpaqueId
+    expected_compensation_version: int
+    attempt: CompensationAttempt
+    occurred_at: UtcTimestamp
+    actor: PrincipalRef | None
+    correlation_id: str | None
+    reason_code: str
+    attempt_audit_event_id: OpaqueId
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class RetryCompensationAfterVerification:
+    kind: CompensationProgressKind
+    operation_id: OpaqueId
+    expected_operation_version: int
+    compensation_id: OpaqueId
+    expected_compensation_version: int
+    verification_result: VerificationResult
+    attempt: CompensationAttempt
+    idempotency_mode: IdempotencyMode
+    occurred_at: UtcTimestamp
+    actor: PrincipalRef | None
+    correlation_id: str | None
+    reason_code: str
+    attempt_audit_event_id: OpaqueId
+    verification_audit_event_id: OpaqueId
+    outbox_event_id: OpaqueId
 
 
 OperationTransitionCommand = (
@@ -356,7 +415,12 @@ OperationTransitionCommand = (
     | CompensationFailedEscalate
 )
 
-CompensationProgressCommand = ClaimCompensationExecution
+CompensationProgressCommand = (
+    ClaimCompensationExecution
+    | StartCompensationVerification
+    | ClaimCompensationRetryAttempt
+    | RetryCompensationAfterVerification
+)
 
 TransitionCommand = OperationTransitionCommand | CompensationProgressCommand
 
@@ -402,4 +466,13 @@ COMMAND_TYPE_TO_KIND: dict[type, TransitionKind | CompensationProgressKind] = {
     CompensationFailedRetry: TransitionKind.COMPENSATION_FAILED_RETRY,
     CompensationFailedEscalate: TransitionKind.COMPENSATION_FAILED_ESCALATE,
     ClaimCompensationExecution: CompensationProgressKind.CLAIM_COMPENSATION_EXECUTION,
+    StartCompensationVerification: (
+        CompensationProgressKind.START_COMPENSATION_VERIFICATION
+    ),
+    ClaimCompensationRetryAttempt: (
+        CompensationProgressKind.CLAIM_COMPENSATION_RETRY_ATTEMPT
+    ),
+    RetryCompensationAfterVerification: (
+        CompensationProgressKind.RETRY_COMPENSATION_AFTER_VERIFICATION
+    ),
 }

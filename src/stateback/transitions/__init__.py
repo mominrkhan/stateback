@@ -9,6 +9,7 @@ from stateback.transitions.commands import (
     CancelPendingPolicy,
     CancelReady,
     ClaimCompensationExecution,
+    ClaimCompensationRetryAttempt,
     ClaimExecution,
     CompensationApplied,
     CompensationEscalate,
@@ -33,6 +34,8 @@ from stateback.transitions.commands import (
     PolicyAllow,
     PolicyDeny,
     PolicyRequireApproval,
+    RetryCompensationAfterVerification,
+    StartCompensationVerification,
     SucceededStartCompensation,
     TransitionCommand,
     UnknownEscalate,
@@ -51,7 +54,10 @@ from stateback.transitions.kinds import (
     CompensationProgressKind,
     TransitionKind,
 )
-from stateback.transitions.outbox import OUTBOX_COMMAND_FOR_KIND
+from stateback.transitions.outbox import (
+    OUTBOX_COMMAND_FOR_KIND,
+    OUTBOX_COMMAND_FOR_PROGRESS_KIND,
+)
 from stateback.transitions.results import TransitionOutcome, TransitionResult
 from stateback.transitions.service import TransitionService
 
@@ -62,6 +68,7 @@ __all__ = [
     "CancelPendingPolicy",
     "CancelReady",
     "ClaimCompensationExecution",
+    "ClaimCompensationRetryAttempt",
     "ClaimExecution",
     "CompensationApplied",
     "CompensationFailedEscalate",
@@ -86,9 +93,12 @@ __all__ = [
     "ManualStartCompensation",
     "ManualStartVerification",
     "OUTBOX_COMMAND_FOR_KIND",
+    "OUTBOX_COMMAND_FOR_PROGRESS_KIND",
     "PolicyAllow",
     "PolicyDeny",
     "PolicyRequireApproval",
+    "RetryCompensationAfterVerification",
+    "StartCompensationVerification",
     "SucceededStartCompensation",
     "TransitionCommand",
     "TransitionKind",

@@ -10,7 +10,14 @@ from stateback.domain.enums import (
 from stateback.domain.ids import OpaqueId
 from stateback.domain.messaging import OutboxEvent
 from stateback.domain.time import UtcTimestamp
-from stateback.transitions.kinds import TransitionKind
+from stateback.transitions.kinds import CompensationProgressKind, TransitionKind
+
+OUTBOX_COMMAND_FOR_PROGRESS_KIND: dict[CompensationProgressKind, WorkCommand] = {
+    CompensationProgressKind.START_COMPENSATION_VERIFICATION: WorkCommand.VERIFY,
+    CompensationProgressKind.RETRY_COMPENSATION_AFTER_VERIFICATION: (
+        WorkCommand.COMPENSATE
+    ),
+}
 
 OUTBOX_COMMAND_FOR_KIND: dict[TransitionKind, WorkCommand] = {
     TransitionKind.POLICY_ALLOW: WorkCommand.EXECUTE,

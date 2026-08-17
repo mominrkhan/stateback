@@ -33,3 +33,14 @@ def test_compensation_progress_kind_not_in_operation_edges() -> None:
         kind.value for kind in TransitionKind
     }
     assert "CLAIM_COMPENSATION_EXECUTION" not in {kind.value for kind in KIND_TO_EDGE}
+
+
+def test_compensation_progress_kind_count_is_4() -> None:
+    assert len(CompensationProgressKind) == 4
+
+
+def test_new_progress_kinds_not_in_kind_to_edge() -> None:
+    progress_values = {kind.value for kind in CompensationProgressKind}
+    edge_values = {kind.value for kind in KIND_TO_EDGE}
+    assert progress_values.isdisjoint(edge_values)
+    assert progress_values.isdisjoint({kind.value for kind in TransitionKind})

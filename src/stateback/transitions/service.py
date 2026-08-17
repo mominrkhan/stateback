@@ -15,6 +15,7 @@ from stateback.domain.enums import (
     CompensationState,
     OperationState,
     TransitionVerdict,
+    WorkCommand,
 )
 from stateback.domain.ids import OpaqueId
 from stateback.domain.jsonutil import JsonValue, json_from_plain
@@ -32,11 +33,14 @@ from stateback.transitions.commands import (
     ApprovalReject,
     CancelAwaitingApproval,
     ClaimCompensationExecution,
+    ClaimCompensationRetryAttempt,
     ClaimExecution,
     CompensationApplied,
+    CompensationEscalate,
     CompensationOutcomeFailed,
     CompensationOutcomeUnknown,
     CompensationUnknownApplied,
+    CompensationUnknownEscalate,
     CompensationUnknownFailed,
     CreateOperation,
     ExecutionApplied,
@@ -51,6 +55,8 @@ from stateback.transitions.commands import (
     PolicyAllow,
     PolicyDeny,
     PolicyRequireApproval,
+    RetryCompensationAfterVerification,
+    StartCompensationVerification,
     SucceededStartCompensation,
     TransitionCommand,
     UnknownReconcileApplied,
@@ -74,7 +80,10 @@ from stateback.transitions.preconditions import (
     ESCALATE_KINDS,
     RelatedRecords,
     evaluate_claim_compensation_preconditions,
+    evaluate_claim_compensation_retry_attempt_preconditions,
     evaluate_preconditions,
+    evaluate_retry_compensation_after_verification_preconditions,
+    evaluate_start_compensation_verification_preconditions,
 )
 from stateback.transitions.results import TransitionOutcome, TransitionResult
 
@@ -97,6 +106,12 @@ class TransitionService:
             return self._apply_create(uow, command)
         if isinstance(command, ClaimCompensationExecution):
             return self._apply_claim_compensation(uow, command)
+        if isinstance(command, StartCompensationVerification):
+            return self._apply_start_compensation_verification(uow, command)
+        if isinstance(command, ClaimCompensationRetryAttempt):
+            return self._apply_claim_compensation_retry_attempt(uow, command)
+        if isinstance(command, RetryCompensationAfterVerification):
+            return self._apply_retry_compensation_after_verification(uow, command)
         return self._apply_operation(uow, command)
 
     def _apply_create(
@@ -324,10 +339,483 @@ class TransitionService:
             operation_version=loaded.version,
         )
 
+    def _apply_start_compensation_verification(
+        self, uow: UnitOfWork, command: StartCompensationVerification
+    ) -> TransitionResult:
+        loaded = uow.operations.get_for_update(command.operation_id)
+        if loaded is None:
+            raise NotFoundError("operation not found")
+        if loaded.version != command.expected_operation_version:
+            raise ConcurrencyConflictError("stale operation version")
+        if loaded.state is not OperationState.COMPENSATING:
+            return self._rejected(
+                command.kind,
+                "source_state_mismatch",
+                loaded,
+                loaded.state,
+                OperationState.COMPENSATING,
+                loaded.version,
+            )
+        compensation = uow.compensations.get(command.compensation_id)
+        if compensation is None:
+            return self._rejected(
+                command.kind,
+                "compensation_missing",
+                loaded,
+                loaded.state,
+                loaded.state,
+                loaded.version,
+            )
+        if compensation.original_operation_id != loaded.operation_id:
+            return self._rejected(
+                command.kind,
+                "compensation_parent_inconsistent",
+                loaded,
+                loaded.state,
+                loaded.state,
+                loaded.version,
+                compensation=compensation,
+            )
+        if compensation.version == command.expected_compensation_version + 1:
+            if compensation.state is CompensationState.VERIFYING:
+                return self._already(
+                    command.kind,
+                    loaded,
+                    loaded.state,
+                    loaded.state,
+                    loaded.version,
+                    compensation=compensation,
+                )
+            return self._rejected(
+                command.kind,
+                "idempotent_mismatch",
+                loaded,
+                loaded.state,
+                loaded.state,
+                loaded.version,
+                compensation=compensation,
+            )
+        if compensation.version != command.expected_compensation_version:
+            raise ConcurrencyConflictError("stale compensation version")
+        attempts = tuple(
+            uow.compensation_attempts.list_for_compensation(
+                compensation.compensation_id
+            )
+        )
+        loaded_attempt = attempts[-1] if attempts else None
+        reason = evaluate_start_compensation_verification_preconditions(
+            command,
+            operation=loaded,
+            compensation=compensation,
+            loaded_attempt=loaded_attempt,
+        )
+        if reason is not None:
+            return self._rejected(
+                command.kind,
+                reason,
+                loaded,
+                loaded.state,
+                loaded.state,
+                loaded.version,
+                compensation=compensation,
+            )
+        completed = command.completed_compensation_attempt
+        if (
+            completed is not None
+            and loaded_attempt is not None
+            and loaded_attempt.state is AttemptState.STARTED
+        ):
+            uow.compensation_attempts.complete(completed)
+        uow.verifications.insert_request(command.verification_request)
+        new_compensation = replace_compensation(
+            compensation,
+            state=CompensationState.VERIFYING,
+            version=next_version(compensation.version),
+            updated_at=command.occurred_at,
+        )
+        uow.compensations.update_cas(
+            command.expected_compensation_version, new_compensation
+        )
+        sequence = uow.audit_events.next_sequence(loaded.operation_id)
+        if completed is not None:
+            attempt_audit_event_id = command.attempt_audit_event_id
+            if attempt_audit_event_id is None:
+                raise ValueError(
+                    "attempt_audit_event_id is required when completing an attempt"
+                )
+            event = self._event(
+                audit_event_id=attempt_audit_event_id,
+                operation_id=loaded.operation_id,
+                sequence=sequence,
+                event_type=AuditEventType.COMPENSATION_RESULT,
+                from_state=OperationState.COMPENSATING,
+                to_state=OperationState.COMPENSATING,
+                operation_version=loaded.version,
+                actor=command.actor,
+                reason_code=command.reason_code,
+                data=_audit_data(
+                    kind=command.kind,
+                    compensation_id=compensation.compensation_id,
+                    compensation_attempt_id=completed.compensation_attempt_id,
+                    effect_outcome=completed.outcome,
+                ),
+                correlation_id=command.correlation_id,
+                created_at=command.occurred_at,
+            )
+        else:
+            event = self._event(
+                audit_event_id=command.verification_audit_event_id,
+                operation_id=loaded.operation_id,
+                sequence=sequence,
+                event_type=AuditEventType.COMPENSATION_ATTEMPTED,
+                from_state=OperationState.COMPENSATING,
+                to_state=OperationState.COMPENSATING,
+                operation_version=loaded.version,
+                actor=command.actor,
+                reason_code=command.reason_code,
+                data=_audit_data(
+                    kind=command.kind,
+                    compensation_id=compensation.compensation_id,
+                    verification_id=command.verification_request.verification_id,
+                ),
+                correlation_id=command.correlation_id,
+                created_at=command.occurred_at,
+            )
+        uow.audit_events.append(event)
+        outbox_event = build_outbox_event(
+            event_id=command.outbox_event_id,
+            operation_id=loaded.operation_id,
+            operation_version=loaded.version,
+            command=WorkCommand.VERIFY,
+            created_at=command.occurred_at,
+            correlation_id=command.correlation_id,
+        )
+        uow.outbox_events.insert(outbox_event)
+        return TransitionResult(
+            outcome=TransitionOutcome.APPLIED,
+            reason_code="applied",
+            kind=command.kind,
+            operation=loaded,
+            compensation=new_compensation,
+            audit_events=(event,),
+            outbox_event=outbox_event,
+            from_state=OperationState.COMPENSATING,
+            to_state=OperationState.COMPENSATING,
+            operation_version=loaded.version,
+        )
+
+    def _apply_claim_compensation_retry_attempt(
+        self, uow: UnitOfWork, command: ClaimCompensationRetryAttempt
+    ) -> TransitionResult:
+        loaded = uow.operations.get_for_update(command.operation_id)
+        if loaded is None:
+            raise NotFoundError("operation not found")
+        if loaded.version != command.expected_operation_version:
+            raise ConcurrencyConflictError("stale operation version")
+        if loaded.state is not OperationState.COMPENSATING:
+            return self._rejected(
+                command.kind,
+                "source_state_mismatch",
+                loaded,
+                loaded.state,
+                OperationState.COMPENSATING,
+                loaded.version,
+            )
+        compensation = uow.compensations.get(command.compensation_id)
+        if compensation is None:
+            return self._rejected(
+                command.kind,
+                "compensation_missing",
+                loaded,
+                loaded.state,
+                loaded.state,
+                loaded.version,
+            )
+        if compensation.original_operation_id != loaded.operation_id:
+            return self._rejected(
+                command.kind,
+                "compensation_parent_inconsistent",
+                loaded,
+                loaded.state,
+                loaded.state,
+                loaded.version,
+                compensation=compensation,
+            )
+        if compensation.version == command.expected_compensation_version + 1:
+            attempts = tuple(
+                uow.compensation_attempts.list_for_compensation(
+                    compensation.compensation_id
+                )
+            )
+            latest = attempts[-1] if attempts else None
+            if (
+                latest is not None
+                and latest.state is AttemptState.STARTED
+                and latest.compensation_attempt_id
+                == command.attempt.compensation_attempt_id
+            ):
+                return self._already(
+                    command.kind,
+                    loaded,
+                    loaded.state,
+                    loaded.state,
+                    loaded.version,
+                    compensation=compensation,
+                )
+            return self._rejected(
+                command.kind,
+                "idempotent_mismatch",
+                loaded,
+                loaded.state,
+                loaded.state,
+                loaded.version,
+                compensation=compensation,
+            )
+        if compensation.version != command.expected_compensation_version:
+            raise ConcurrencyConflictError("stale compensation version")
+        attempts = tuple(
+            uow.compensation_attempts.list_for_compensation(
+                compensation.compensation_id
+            )
+        )
+        reason = evaluate_claim_compensation_retry_attempt_preconditions(
+            command,
+            operation=loaded,
+            compensation=compensation,
+            existing_attempts=attempts,
+        )
+        if reason is not None:
+            return self._rejected(
+                command.kind,
+                reason,
+                loaded,
+                loaded.state,
+                loaded.state,
+                loaded.version,
+                compensation=compensation,
+            )
+        uow.compensation_attempts.insert(command.attempt)
+        new_compensation = replace_compensation(
+            compensation,
+            state=CompensationState.EXECUTING,
+            version=next_version(compensation.version),
+            updated_at=command.occurred_at,
+        )
+        uow.compensations.update_cas(
+            command.expected_compensation_version, new_compensation
+        )
+        sequence = uow.audit_events.next_sequence(loaded.operation_id)
+        attempted = self._event(
+            audit_event_id=command.attempt_audit_event_id,
+            operation_id=loaded.operation_id,
+            sequence=sequence,
+            event_type=AuditEventType.COMPENSATION_ATTEMPTED,
+            from_state=OperationState.COMPENSATING,
+            to_state=OperationState.COMPENSATING,
+            operation_version=loaded.version,
+            actor=command.actor,
+            reason_code=command.reason_code,
+            data=_audit_data(
+                kind=command.kind,
+                compensation_id=compensation.compensation_id,
+                compensation_attempt_id=command.attempt.compensation_attempt_id,
+            ),
+            correlation_id=command.correlation_id,
+            created_at=command.occurred_at,
+        )
+        uow.audit_events.append(attempted)
+        return TransitionResult(
+            outcome=TransitionOutcome.APPLIED,
+            reason_code="applied",
+            kind=command.kind,
+            operation=loaded,
+            compensation=new_compensation,
+            audit_events=(attempted,),
+            outbox_event=None,
+            from_state=OperationState.COMPENSATING,
+            to_state=OperationState.COMPENSATING,
+            operation_version=loaded.version,
+        )
+
+    def _apply_retry_compensation_after_verification(
+        self, uow: UnitOfWork, command: RetryCompensationAfterVerification
+    ) -> TransitionResult:
+        loaded = uow.operations.get_for_update(command.operation_id)
+        if loaded is None:
+            raise NotFoundError("operation not found")
+        if loaded.version != command.expected_operation_version:
+            raise ConcurrencyConflictError("stale operation version")
+        if loaded.state is not OperationState.COMPENSATING:
+            return self._rejected(
+                command.kind,
+                "source_state_mismatch",
+                loaded,
+                loaded.state,
+                OperationState.COMPENSATING,
+                loaded.version,
+            )
+        compensation = uow.compensations.get(command.compensation_id)
+        if compensation is None:
+            return self._rejected(
+                command.kind,
+                "compensation_missing",
+                loaded,
+                loaded.state,
+                loaded.state,
+                loaded.version,
+            )
+        if compensation.original_operation_id != loaded.operation_id:
+            return self._rejected(
+                command.kind,
+                "compensation_parent_inconsistent",
+                loaded,
+                loaded.state,
+                loaded.state,
+                loaded.version,
+                compensation=compensation,
+            )
+        if compensation.version == command.expected_compensation_version + 1:
+            attempts = tuple(
+                uow.compensation_attempts.list_for_compensation(
+                    compensation.compensation_id
+                )
+            )
+            latest = attempts[-1] if attempts else None
+            if (
+                latest is not None
+                and latest.state is AttemptState.STARTED
+                and latest.compensation_attempt_id
+                == command.attempt.compensation_attempt_id
+            ):
+                return self._already(
+                    command.kind,
+                    loaded,
+                    loaded.state,
+                    loaded.state,
+                    loaded.version,
+                    compensation=compensation,
+                )
+            return self._rejected(
+                command.kind,
+                "idempotent_mismatch",
+                loaded,
+                loaded.state,
+                loaded.state,
+                loaded.version,
+                compensation=compensation,
+            )
+        if compensation.version != command.expected_compensation_version:
+            raise ConcurrencyConflictError("stale compensation version")
+        attempts = tuple(
+            uow.compensation_attempts.list_for_compensation(
+                compensation.compensation_id
+            )
+        )
+        existing = uow.verifications.get(command.verification_result.verification_id)
+        reason = evaluate_retry_compensation_after_verification_preconditions(
+            command,
+            operation=loaded,
+            compensation=compensation,
+            existing_attempts=attempts,
+            existing_verification=existing,
+        )
+        if reason is not None:
+            return self._rejected(
+                command.kind,
+                reason,
+                loaded,
+                loaded.state,
+                loaded.state,
+                loaded.version,
+                compensation=compensation,
+            )
+        if existing is not None and existing[1] is None:
+            uow.verifications.complete(command.verification_result)
+        uow.compensation_attempts.insert(command.attempt)
+        new_compensation = replace_compensation(
+            compensation,
+            state=CompensationState.EXECUTING,
+            version=next_version(compensation.version),
+            updated_at=command.occurred_at,
+        )
+        uow.compensations.update_cas(
+            command.expected_compensation_version, new_compensation
+        )
+        sequence = uow.audit_events.next_sequence(loaded.operation_id)
+        verification_event = self._event(
+            audit_event_id=command.verification_audit_event_id,
+            operation_id=loaded.operation_id,
+            sequence=sequence,
+            event_type=AuditEventType.VERIFICATION_COMPLETED,
+            from_state=OperationState.COMPENSATING,
+            to_state=OperationState.COMPENSATING,
+            operation_version=loaded.version,
+            actor=command.actor,
+            reason_code=command.reason_code,
+            data=_audit_data(
+                kind=command.kind,
+                verification_id=command.verification_result.verification_id,
+                effect_outcome=command.verification_result.outcome,
+            ),
+            correlation_id=command.correlation_id,
+            created_at=command.occurred_at,
+        )
+        sequence += 1
+        attempted = self._event(
+            audit_event_id=command.attempt_audit_event_id,
+            operation_id=loaded.operation_id,
+            sequence=sequence,
+            event_type=AuditEventType.COMPENSATION_ATTEMPTED,
+            from_state=OperationState.COMPENSATING,
+            to_state=OperationState.COMPENSATING,
+            operation_version=loaded.version,
+            actor=command.actor,
+            reason_code=command.reason_code,
+            data=_audit_data(
+                kind=command.kind,
+                compensation_id=compensation.compensation_id,
+                compensation_attempt_id=command.attempt.compensation_attempt_id,
+            ),
+            correlation_id=command.correlation_id,
+            created_at=command.occurred_at,
+        )
+        uow.audit_events.append(verification_event)
+        uow.audit_events.append(attempted)
+        outbox_event = build_outbox_event(
+            event_id=command.outbox_event_id,
+            operation_id=loaded.operation_id,
+            operation_version=loaded.version,
+            command=WorkCommand.COMPENSATE,
+            created_at=command.occurred_at,
+            correlation_id=command.correlation_id,
+        )
+        uow.outbox_events.insert(outbox_event)
+        return TransitionResult(
+            outcome=TransitionOutcome.APPLIED,
+            reason_code="applied",
+            kind=command.kind,
+            operation=loaded,
+            compensation=new_compensation,
+            audit_events=(verification_event, attempted),
+            outbox_event=outbox_event,
+            from_state=OperationState.COMPENSATING,
+            to_state=OperationState.COMPENSATING,
+            operation_version=loaded.version,
+        )
+
     def _apply_operation(
         self, uow: UnitOfWork, command: TransitionCommand
     ) -> TransitionResult:
-        assert not isinstance(command, (CreateOperation, ClaimCompensationExecution))
+        assert not isinstance(
+            command,
+            (
+                CreateOperation,
+                ClaimCompensationExecution,
+                StartCompensationVerification,
+                ClaimCompensationRetryAttempt,
+                RetryCompensationAfterVerification,
+            ),
+        )
         kind = command.kind
         assert isinstance(kind, TransitionKind)
         source, target = KIND_TO_EDGE[kind]
@@ -446,13 +934,28 @@ class TransitionService:
                         compensation.compensation_id
                     )
                 )
-                completed = getattr(command, "completed_compensation_attempt", None)
-                if completed is not None:
-                    loaded_compensation_attempt = uow.compensation_attempts.get(
-                        completed.compensation_attempt_id
-                    )
-                elif compensation_attempts:
+                if compensation_attempts:
                     loaded_compensation_attempt = compensation_attempts[-1]
+        existing_compensation_verification = None
+        if isinstance(
+            command,
+            (
+                CompensationApplied,
+                CompensationOutcomeUnknown,
+                CompensationOutcomeFailed,
+                CompensationUnknownApplied,
+                CompensationUnknownFailed,
+                CompensationEscalate,
+                CompensationUnknownEscalate,
+            ),
+        ):
+            compensation_verification_result = command.verification_result
+            if compensation_verification_result is not None:
+                pair = uow.verifications.get(
+                    compensation_verification_result.verification_id
+                )
+                if pair is not None:
+                    existing_compensation_verification = pair
         return RelatedRecords(
             existing_approval=existing_approval,
             attempts=attempts,
@@ -461,6 +964,7 @@ class TransitionService:
             compensation=compensation,
             compensation_attempts=compensation_attempts,
             loaded_compensation_attempt=loaded_compensation_attempt,
+            existing_compensation_verification=existing_compensation_verification,
         )
 
     def _write_related(
@@ -549,6 +1053,24 @@ class TransitionService:
                 and related.loaded_compensation_attempt.state is AttemptState.STARTED
             ):
                 uow.compensation_attempts.complete(completed)
+        if isinstance(
+            command,
+            (
+                CompensationApplied,
+                CompensationOutcomeUnknown,
+                CompensationOutcomeFailed,
+                CompensationUnknownApplied,
+                CompensationUnknownFailed,
+                CompensationEscalate,
+                CompensationUnknownEscalate,
+            ),
+        ):
+            verification_result = command.verification_result
+            if verification_result is not None and (
+                related.existing_compensation_verification is not None
+                and related.existing_compensation_verification[1] is None
+            ):
+                uow.verifications.complete(verification_result)
         if (
             isinstance(kind, TransitionKind)
             and kind in COMPENSATION_TARGET_STATE

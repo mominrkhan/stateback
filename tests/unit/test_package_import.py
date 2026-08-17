@@ -42,6 +42,7 @@ def test_import_does_not_open_sockets_or_connect_to_postgres() -> None:
         policy = importlib.import_module("stateback.policy")
         runtime = importlib.import_module("stateback.runtime")
         recovery = importlib.import_module("stateback.recovery")
+        compensation = importlib.import_module("stateback.compensation")
     assert module.__version__ == "0.0.0"
     assert domain.CONTRACT_VERSION == "v1"
     assert hasattr(persistence, "create_engine_from_env")
@@ -51,6 +52,7 @@ def test_import_does_not_open_sockets_or_connect_to_postgres() -> None:
     assert hasattr(policy, "AllowAllPolicyEngine")
     assert hasattr(runtime, "SynchronousRuntime")
     assert hasattr(recovery, "RecoveryService")
+    assert hasattr(compensation, "CompensationService")
 
 
 def test_import_persistence_does_not_create_engine(

@@ -38,6 +38,7 @@ from stateback.transitions.commands import (
     ApprovalReject,
     CancelAwaitingApproval,
     ClaimCompensationExecution,
+    ClaimCompensationRetryAttempt,
     ClaimExecution,
     CompensationApplied,
     CompensationEscalate,
@@ -62,6 +63,8 @@ from stateback.transitions.commands import (
     PolicyAllow,
     PolicyDeny,
     PolicyRequireApproval,
+    RetryCompensationAfterVerification,
+    StartCompensationVerification,
     SucceededStartCompensation,
     UnknownReconcileApplied,
     UnknownReconcileNotApplied,
@@ -129,6 +132,9 @@ class RelatedRecords:
     compensation: Compensation | None = None
     compensation_attempts: tuple[CompensationAttempt, ...] = ()
     loaded_compensation_attempt: CompensationAttempt | None = None
+    existing_compensation_verification: (
+        tuple[VerificationRequest, VerificationResult | None] | None
+    ) = None
 
 
 def map_retry_safety_reason(
@@ -271,10 +277,12 @@ def _check_verification_request(
     request: VerificationRequest,
     operation: Operation,
     expected_version: int,
+    *,
+    expected_target: VerificationTarget = VerificationTarget.ORIGINAL_EFFECT,
 ) -> str | None:
     if request.operation_id != operation.operation_id:
         return "attempt_operation_mismatch"
-    if request.target is not VerificationTarget.ORIGINAL_EFFECT:
+    if request.target is not expected_target:
         return "verification_outcome_mismatch"
     if request.operation_version != expected_version:
         return "stale_version"
@@ -309,6 +317,11 @@ def _check_compensation_outcome(
     loaded_attempt: CompensationAttempt | None,
     expected_attempt_outcome: EffectOutcome | None,
     allow_missing_attempt: bool,
+    verification_result: VerificationResult | None = None,
+    expected_verification_outcome: EffectOutcome | None = None,
+    existing_verification: (
+        tuple[VerificationRequest, VerificationResult | None] | None
+    ) = None,
 ) -> str | None:
     if operation.compensation_id is None:
         return "compensation_missing"
@@ -321,6 +334,29 @@ def _check_compensation_outcome(
     current = compensation_parent_is_consistent(compensation.state, operation.state)
     if not current.is_legal():
         return "compensation_parent_inconsistent"
+    if verification_result is not None:
+        if (
+            expected_verification_outcome is not None
+            and verification_result.outcome is not expected_verification_outcome
+        ):
+            return "verification_outcome_mismatch"
+        if existing_verification is None:
+            return "verification_missing"
+        request, durable_result = existing_verification
+        if request.verification_id != verification_result.verification_id:
+            return "verification_missing"
+        if request.target is not VerificationTarget.COMPENSATION:
+            return "verification_outcome_mismatch"
+        if request.operation_id != operation.operation_id:
+            return "attempt_operation_mismatch"
+        if request.operation_version != operation.version:
+            return "stale_version"
+        if loaded_attempt is None:
+            return "attempt_missing"
+        if request.target_attempt_id != loaded_attempt.compensation_attempt_id:
+            return "attempt_missing"
+        if durable_result is not None and durable_result != verification_result:
+            return "evidence_conflict"
     if kind not in ESCALATE_KINDS:
         target_comp = COMPENSATION_TARGET_STATE.get(kind)
         if target_comp is not None:
@@ -348,6 +384,12 @@ def _check_compensation_outcome(
             expected_attempt_outcome is not None
             and loaded_attempt.outcome is not expected_attempt_outcome
         ):
+            if (
+                verification_result is not None
+                and verification_result.outcome is expected_attempt_outcome
+                and loaded_attempt.outcome is EffectOutcome.UNKNOWN
+            ):
+                return None
             return "attempt_outcome_mismatch"
         return None
     if loaded_attempt.state is not AttemptState.STARTED:
@@ -629,6 +671,9 @@ def evaluate_preconditions(
             loaded_attempt=related.loaded_compensation_attempt,
             expected_attempt_outcome=EffectOutcome.APPLIED,
             allow_missing_attempt=False,
+            verification_result=command.verification_result,
+            expected_verification_outcome=EffectOutcome.APPLIED,
+            existing_verification=related.existing_compensation_verification,
         )
     if isinstance(command, CompensationOutcomeFailed):
         return _check_compensation_outcome(
@@ -639,6 +684,9 @@ def evaluate_preconditions(
             loaded_attempt=related.loaded_compensation_attempt,
             expected_attempt_outcome=EffectOutcome.NOT_APPLIED,
             allow_missing_attempt=False,
+            verification_result=command.verification_result,
+            expected_verification_outcome=EffectOutcome.NOT_APPLIED,
+            existing_verification=related.existing_compensation_verification,
         )
     if isinstance(command, CompensationOutcomeUnknown):
         return _check_compensation_outcome(
@@ -651,6 +699,9 @@ def evaluate_preconditions(
             if command.completed_compensation_attempt is not None
             else None,
             allow_missing_attempt=True,
+            verification_result=command.verification_result,
+            expected_verification_outcome=EffectOutcome.UNKNOWN,
+            existing_verification=related.existing_compensation_verification,
         )
     if isinstance(command, CompensationUnknownApplied):
         return _check_compensation_outcome(
@@ -661,6 +712,9 @@ def evaluate_preconditions(
             loaded_attempt=related.loaded_compensation_attempt,
             expected_attempt_outcome=EffectOutcome.APPLIED,
             allow_missing_attempt=False,
+            verification_result=command.verification_result,
+            expected_verification_outcome=EffectOutcome.APPLIED,
+            existing_verification=related.existing_compensation_verification,
         )
     if isinstance(command, CompensationUnknownFailed):
         return _check_compensation_outcome(
@@ -671,6 +725,9 @@ def evaluate_preconditions(
             loaded_attempt=related.loaded_compensation_attempt,
             expected_attempt_outcome=EffectOutcome.NOT_APPLIED,
             allow_missing_attempt=False,
+            verification_result=command.verification_result,
+            expected_verification_outcome=EffectOutcome.NOT_APPLIED,
+            existing_verification=related.existing_compensation_verification,
         )
     if isinstance(command, CompensationUnknownRetry):
         return _check_compensation_outcome(
@@ -705,9 +762,11 @@ def evaluate_preconditions(
             operation=operation,
             compensation=related.compensation,
             completed=None,
-            loaded_attempt=None,
+            loaded_attempt=related.loaded_compensation_attempt,
             expected_attempt_outcome=None,
             allow_missing_attempt=True,
+            verification_result=getattr(command, "verification_result", None),
+            existing_verification=related.existing_compensation_verification,
         )
     return None
 
@@ -745,6 +804,179 @@ def evaluate_claim_compensation_preconditions(
     if attempt.attempt_number != len(existing_attempts) + 1:
         return "attempt_number_mismatch"
     return None
+
+
+def evaluate_start_compensation_verification_preconditions(
+    command: StartCompensationVerification,
+    *,
+    operation: Operation,
+    compensation: Compensation,
+    loaded_attempt: CompensationAttempt | None,
+) -> str | None:
+    if command.kind is not CompensationProgressKind.START_COMPENSATION_VERIFICATION:
+        return "unlisted_operation_transition"
+    if operation.state is not OperationState.COMPENSATING:
+        return "source_state_mismatch"
+    if compensation.original_operation_id != operation.operation_id:
+        return "compensation_parent_inconsistent"
+    if compensation.state is not CompensationState.EXECUTING:
+        return "compensation_state_mismatch"
+    edge = evaluate_compensation_transition(
+        CompensationState.EXECUTING, CompensationState.VERIFYING
+    )
+    if not edge.is_legal():
+        return "unlisted_operation_transition"
+    parent = compensation_parent_is_consistent(
+        CompensationState.VERIFYING, OperationState.COMPENSATING
+    )
+    if not parent.is_legal():
+        return "compensation_parent_inconsistent"
+    reason = _check_verification_request(
+        command.verification_request,
+        operation,
+        command.expected_operation_version,
+        expected_target=VerificationTarget.COMPENSATION,
+    )
+    if reason is not None:
+        return reason
+    completed = command.completed_compensation_attempt
+    if completed is not None:
+        if loaded_attempt is None:
+            return "attempt_missing"
+        if completed.compensation_id != compensation.compensation_id:
+            return "evidence_conflict"
+        if completed.compensation_attempt_id != loaded_attempt.compensation_attempt_id:
+            return "evidence_conflict"
+        if loaded_attempt.state is AttemptState.COMPLETED:
+            if completed.outcome != loaded_attempt.outcome:
+                return "evidence_conflict"
+            if loaded_attempt.outcome is not EffectOutcome.APPLIED:
+                return "attempt_outcome_mismatch"
+            return None
+        if loaded_attempt.state is not AttemptState.STARTED:
+            return "attempt_not_started"
+        if completed.state is not AttemptState.COMPLETED:
+            return "attempt_not_completed"
+        if completed.outcome is not EffectOutcome.APPLIED:
+            return "attempt_outcome_mismatch"
+        return None
+    if loaded_attempt is None:
+        return "attempt_missing"
+    if loaded_attempt.state not in (AttemptState.COMPLETED, AttemptState.STARTED):
+        return "attempt_not_started"
+    return None
+
+
+def evaluate_claim_compensation_retry_attempt_preconditions(
+    command: ClaimCompensationRetryAttempt,
+    *,
+    operation: Operation,
+    compensation: Compensation,
+    existing_attempts: tuple[CompensationAttempt, ...],
+) -> str | None:
+    if command.kind is not CompensationProgressKind.CLAIM_COMPENSATION_RETRY_ATTEMPT:
+        return "unlisted_operation_transition"
+    if operation.state is not OperationState.COMPENSATING:
+        return "source_state_mismatch"
+    if compensation.original_operation_id != operation.operation_id:
+        return "compensation_parent_inconsistent"
+    if compensation.state is not CompensationState.EXECUTING:
+        return "compensation_state_mismatch"
+    parent = compensation_parent_is_consistent(
+        CompensationState.EXECUTING, OperationState.COMPENSATING
+    )
+    if not parent.is_legal():
+        return "compensation_parent_inconsistent"
+    if not existing_attempts:
+        return "attempt_missing"
+    latest = existing_attempts[-1]
+    if latest.state is not AttemptState.COMPLETED:
+        return "attempt_not_completed"
+    attempt = command.attempt
+    if attempt.compensation_id != compensation.compensation_id:
+        return "compensation_parent_inconsistent"
+    if attempt.state is not AttemptState.STARTED:
+        return "attempt_not_started"
+    if attempt.attempt_number != len(existing_attempts) + 1:
+        return "attempt_number_mismatch"
+    if attempt.provider_idempotency_key is not None:
+        for item in existing_attempts:
+            if (
+                item.provider_idempotency_key is not None
+                and item.provider_idempotency_key != attempt.provider_idempotency_key
+            ):
+                return "idempotency_key_mismatch"
+    return None
+
+
+def evaluate_retry_compensation_after_verification_preconditions(
+    command: RetryCompensationAfterVerification,
+    *,
+    operation: Operation,
+    compensation: Compensation,
+    existing_attempts: tuple[CompensationAttempt, ...],
+    existing_verification: tuple[VerificationRequest, VerificationResult | None] | None,
+) -> str | None:
+    if (
+        command.kind
+        is not CompensationProgressKind.RETRY_COMPENSATION_AFTER_VERIFICATION
+    ):
+        return "unlisted_operation_transition"
+    if operation.state is not OperationState.COMPENSATING:
+        return "source_state_mismatch"
+    if compensation.original_operation_id != operation.operation_id:
+        return "compensation_parent_inconsistent"
+    if compensation.state is not CompensationState.VERIFYING:
+        return "compensation_state_mismatch"
+    edge = evaluate_compensation_transition(
+        CompensationState.VERIFYING, CompensationState.EXECUTING
+    )
+    if not edge.is_legal():
+        return "unlisted_operation_transition"
+    parent = compensation_parent_is_consistent(
+        CompensationState.EXECUTING, OperationState.COMPENSATING
+    )
+    if not parent.is_legal():
+        return "compensation_parent_inconsistent"
+    if command.verification_result.outcome is not EffectOutcome.NOT_APPLIED:
+        return "verification_outcome_mismatch"
+    if existing_verification is None:
+        return "verification_missing"
+    request, durable_result = existing_verification
+    if request.verification_id != command.verification_result.verification_id:
+        return "verification_missing"
+    if request.target is not VerificationTarget.COMPENSATION:
+        return "verification_outcome_mismatch"
+    if request.operation_id != operation.operation_id:
+        return "attempt_operation_mismatch"
+    if request.operation_version != operation.version:
+        return "stale_version"
+    if not existing_attempts:
+        return "attempt_missing"
+    if request.target_attempt_id != existing_attempts[-1].compensation_attempt_id:
+        return "attempt_missing"
+    if durable_result is not None and durable_result != command.verification_result:
+        return "evidence_conflict"
+    attempt = command.attempt
+    if attempt.compensation_id != compensation.compensation_id:
+        return "compensation_parent_inconsistent"
+    if attempt.state is not AttemptState.STARTED:
+        return "attempt_not_started"
+    if attempt.attempt_number != len(existing_attempts) + 1:
+        return "attempt_number_mismatch"
+    if attempt.provider_idempotency_key is not None:
+        for item in existing_attempts:
+            if (
+                item.provider_idempotency_key is not None
+                and item.provider_idempotency_key != attempt.provider_idempotency_key
+            ):
+                return "idempotency_key_mismatch"
+    return map_retry_safety_reason(
+        execution_outcome=None,
+        verification_outcome=EffectOutcome.NOT_APPLIED,
+        idempotency_mode=command.idempotency_mode,
+        insufficient_signal=None,
+    )
 
 
 def approval_id_of(command: object) -> OpaqueId | None:

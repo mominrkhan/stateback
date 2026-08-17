@@ -1,28 +1,52 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime
 
 import pytest
 
+from stateback.domain.compensation import Compensation, CompensationAttempt
 from stateback.domain.enums import (
     CONTRACT_VERSION,
     ApprovalState,
+    AttemptState,
+    CompensationState,
+    EffectOutcome,
     IdempotencyMode,
     OperationState,
     PolicyVerdict,
+    VerificationTarget,
 )
+from stateback.domain.ids import OpaqueId
 from stateback.domain.intent import operation_idempotency_identity
 from stateback.domain.operation import Operation, next_version
 from stateback.domain.policy import Approval, PolicyDecision, PolicyObligations
 from stateback.domain.time import UtcTimestamp
+from stateback.domain.verification import VerificationRequest
 from stateback.transitions.commands import (
     ApprovalGrant,
+    CompensationApplied,
+    CompensationEscalate,
+    CompensationOutcomeFailed,
     PolicyAllow,
+    RetryCompensationAfterVerification,
     UnknownEscalate,
     UnknownSafeRetry,
 )
-from stateback.transitions.kinds import TransitionKind
-from stateback.transitions.preconditions import RelatedRecords, evaluate_preconditions
+from stateback.transitions.kinds import CompensationProgressKind, TransitionKind
+from stateback.transitions.preconditions import (
+    RelatedRecords,
+    evaluate_preconditions,
+    evaluate_retry_compensation_after_verification_preconditions,
+)
+from tests.unit.compensation.fixtures import (
+    DESCRIPTOR,
+    make_compensation,
+    make_compensation_attempt,
+    make_operation,
+    make_verification_request,
+    make_verification_result,
+)
 from tests.unit.domain.fixtures import (
     APPROVAL_ID,
     AUDIT_ID,
@@ -139,7 +163,7 @@ def test_retry_provider_key_needs_proof_rejected() -> None:
         correlation_id=None,
         reason_code="test",
         transition_audit_event_id=AUDIT_ID,
-        idempotency_mode=IdempotencyMode.PROVIDER_KEY,
+        idempotency_mode=DESCRIPTOR.idempotency_mode,
         execution_outcome=None,
         verification_outcome=None,
         outbox_event_id=OUTBOX_ID,
@@ -222,3 +246,230 @@ def test_actor_required_for_manual_escalate() -> None:
         related=RelatedRecords(),
     )
     assert reason == "actor_required"
+
+
+def _retry_compensation_command() -> RetryCompensationAfterVerification:
+    next_attempt = replace(
+        make_compensation_attempt(state=AttemptState.STARTED, outcome=None),
+        compensation_attempt_id=OpaqueId(value="00000000-0000-4000-8000-00000000000b"),
+        attempt_number=2,
+    )
+    return RetryCompensationAfterVerification(
+        kind=CompensationProgressKind.RETRY_COMPENSATION_AFTER_VERIFICATION,
+        operation_id=OP_ID,
+        expected_operation_version=2,
+        compensation_id=make_compensation().compensation_id,
+        expected_compensation_version=2,
+        verification_result=make_verification_result(outcome=EffectOutcome.NOT_APPLIED),
+        attempt=next_attempt,
+        idempotency_mode=IdempotencyMode.PROVIDER_KEY,
+        occurred_at=LATER,
+        actor=REQUESTER,
+        correlation_id=None,
+        reason_code="safe_retry",
+        attempt_audit_event_id=AUDIT_ID,
+        verification_audit_event_id=AUDIT_ID,
+        outbox_event_id=OUTBOX_ID,
+    )
+
+
+def test_compensation_retry_rejects_missing_persisted_verification() -> None:
+    command = _retry_compensation_command()
+    reason = evaluate_retry_compensation_after_verification_preconditions(
+        command,
+        operation=make_operation(state=OperationState.COMPENSATING),
+        compensation=make_compensation(state=CompensationState.VERIFYING, version=2),
+        existing_attempts=(make_compensation_attempt(outcome=EffectOutcome.UNKNOWN),),
+        existing_verification=None,
+    )
+    assert reason == "verification_missing"
+
+
+def test_compensation_retry_rejects_wrong_persisted_verification_target() -> None:
+    command = _retry_compensation_command()
+    request = replace(
+        make_verification_request(), target=VerificationTarget.ORIGINAL_EFFECT
+    )
+    reason = evaluate_retry_compensation_after_verification_preconditions(
+        command,
+        operation=make_operation(state=OperationState.COMPENSATING),
+        compensation=make_compensation(state=CompensationState.VERIFYING, version=2),
+        existing_attempts=(make_compensation_attempt(outcome=EffectOutcome.UNKNOWN),),
+        existing_verification=(request, None),
+    )
+    assert reason == "verification_outcome_mismatch"
+
+
+def _verifying_operation() -> tuple[Operation, Compensation, CompensationAttempt]:
+    compensation = make_compensation(state=CompensationState.VERIFYING, version=2)
+    operation = replace(
+        make_operation(state=OperationState.COMPENSATING),
+        compensation_id=compensation.compensation_id,
+    )
+    loaded_attempt = make_compensation_attempt(outcome=EffectOutcome.UNKNOWN)
+    return operation, compensation, loaded_attempt
+
+
+def _compensation_verification_request() -> VerificationRequest:
+    return replace(make_verification_request(), target=VerificationTarget.COMPENSATION)
+
+
+def test_compensation_applied_rejects_missing_persisted_verification() -> None:
+    operation, compensation, loaded_attempt = _verifying_operation()
+    command = CompensationApplied(
+        kind=TransitionKind.COMPENSATION_APPLIED,
+        operation_id=operation.operation_id,
+        expected_version=operation.version,
+        occurred_at=LATER,
+        actor=REQUESTER,
+        correlation_id=None,
+        reason_code="verified_applied",
+        transition_audit_event_id=AUDIT_ID,
+        completed_compensation_attempt=make_compensation_attempt(
+            outcome=EffectOutcome.APPLIED
+        ),
+        compensation_result_audit_event_id=AUDIT_ID,
+        verification_result=make_verification_result(outcome=EffectOutcome.APPLIED),
+    )
+    reason = evaluate_preconditions(
+        command,
+        operation=operation,
+        related=RelatedRecords(
+            compensation=compensation,
+            loaded_compensation_attempt=loaded_attempt,
+        ),
+    )
+    assert reason == "verification_missing"
+
+
+def test_compensation_failed_rejects_conflicting_persisted_verification() -> None:
+    operation, compensation, loaded_attempt = _verifying_operation()
+    command = CompensationOutcomeFailed(
+        kind=TransitionKind.COMPENSATION_OUTCOME_FAILED,
+        operation_id=operation.operation_id,
+        expected_version=operation.version,
+        occurred_at=LATER,
+        actor=REQUESTER,
+        correlation_id=None,
+        reason_code="verified_not_applied",
+        transition_audit_event_id=AUDIT_ID,
+        completed_compensation_attempt=make_compensation_attempt(
+            outcome=EffectOutcome.NOT_APPLIED
+        ),
+        compensation_result_audit_event_id=AUDIT_ID,
+        verification_result=make_verification_result(outcome=EffectOutcome.NOT_APPLIED),
+    )
+    reason = evaluate_preconditions(
+        command,
+        operation=operation,
+        related=RelatedRecords(
+            compensation=compensation,
+            loaded_compensation_attempt=loaded_attempt,
+            existing_compensation_verification=(
+                _compensation_verification_request(),
+                make_verification_result(outcome=EffectOutcome.APPLIED),
+            ),
+        ),
+    )
+    assert reason == "evidence_conflict"
+
+
+def test_compensation_escalate_rejects_wrong_verification_attempt() -> None:
+    operation, compensation, loaded_attempt = _verifying_operation()
+    command = CompensationEscalate(
+        kind=TransitionKind.COMPENSATION_ESCALATE,
+        operation_id=operation.operation_id,
+        expected_version=operation.version,
+        occurred_at=LATER,
+        actor=REQUESTER,
+        correlation_id=None,
+        reason_code="verification_inconclusive",
+        transition_audit_event_id=AUDIT_ID,
+        manual_audit_event_id=AUDIT_ID,
+        verification_result=make_verification_result(outcome=EffectOutcome.UNKNOWN),
+    )
+    wrong_request = replace(
+        _compensation_verification_request(),
+        target_attempt_id=OpaqueId(value="00000000-0000-4000-8000-00000000000c"),
+    )
+    reason = evaluate_preconditions(
+        command,
+        operation=operation,
+        related=RelatedRecords(
+            compensation=compensation,
+            loaded_compensation_attempt=loaded_attempt,
+            existing_compensation_verification=(wrong_request, None),
+        ),
+    )
+    assert reason == "attempt_missing"
+
+
+def test_compensation_outcome_rejects_non_latest_attempt() -> None:
+    compensation = make_compensation(state=CompensationState.EXECUTING, version=2)
+    operation = replace(
+        make_operation(state=OperationState.COMPENSATING),
+        compensation_id=compensation.compensation_id,
+    )
+    older_completed = make_compensation_attempt(outcome=EffectOutcome.APPLIED)
+    latest_started = replace(
+        make_compensation_attempt(state=AttemptState.STARTED, outcome=None),
+        compensation_attempt_id=OpaqueId(value="00000000-0000-4000-8000-00000000000d"),
+        attempt_number=2,
+    )
+    command = CompensationApplied(
+        kind=TransitionKind.COMPENSATION_APPLIED,
+        operation_id=operation.operation_id,
+        expected_version=operation.version,
+        occurred_at=LATER,
+        actor=REQUESTER,
+        correlation_id=None,
+        reason_code="late_applied",
+        transition_audit_event_id=AUDIT_ID,
+        completed_compensation_attempt=older_completed,
+        compensation_result_audit_event_id=AUDIT_ID,
+    )
+
+    reason = evaluate_preconditions(
+        command,
+        operation=operation,
+        related=RelatedRecords(
+            compensation=compensation,
+            compensation_attempts=(older_completed, latest_started),
+            loaded_compensation_attempt=latest_started,
+        ),
+    )
+    assert reason == "evidence_conflict"
+
+
+def test_compensation_applied_rejects_not_applied_verification() -> None:
+    operation, compensation, loaded_attempt = _verifying_operation()
+    result = make_verification_result(outcome=EffectOutcome.NOT_APPLIED)
+    command = CompensationApplied(
+        kind=TransitionKind.COMPENSATION_APPLIED,
+        operation_id=operation.operation_id,
+        expected_version=operation.version,
+        occurred_at=LATER,
+        actor=REQUESTER,
+        correlation_id=None,
+        reason_code="contradictory_applied",
+        transition_audit_event_id=AUDIT_ID,
+        completed_compensation_attempt=make_compensation_attempt(
+            outcome=EffectOutcome.APPLIED
+        ),
+        compensation_result_audit_event_id=AUDIT_ID,
+        verification_result=result,
+    )
+
+    reason = evaluate_preconditions(
+        command,
+        operation=operation,
+        related=RelatedRecords(
+            compensation=compensation,
+            loaded_compensation_attempt=loaded_attempt,
+            existing_compensation_verification=(
+                _compensation_verification_request(),
+                result,
+            ),
+        ),
+    )
+    assert reason == "verification_outcome_mismatch"
