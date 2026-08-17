@@ -10,7 +10,11 @@ from stateback.runtime import SynchronousRuntime
 from tests.integration.recovery.conftest import make_recovery, run_unknown_timeout
 from tests.integration.recovery.idseq import IdSeq
 
-pytestmark = [pytest.mark.integration, pytest.mark.postgres]
+pytestmark = [
+    pytest.mark.integration,
+    pytest.mark.postgres,
+    pytest.mark.benchmark_correctness,
+]
 
 
 def test_verify_timeout_stays_unknown_not_failed(

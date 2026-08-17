@@ -36,7 +36,11 @@ from tests.integration.compensation.idseq import IdSeq
 from tests.integration.runtime.conftest import make_submit, rebuild_runtime
 from tests.integration.runtime.idseq import execute_ids
 
-pytestmark = [pytest.mark.integration, pytest.mark.postgres]
+pytestmark = [
+    pytest.mark.integration,
+    pytest.mark.postgres,
+    pytest.mark.benchmark_correctness,
+]
 
 
 def test_crash_after_start_leaves_pending_no_compensate(

@@ -40,7 +40,12 @@ from tests.integration.runtime.conftest import (
 )
 from tests.integration.runtime.idseq import IdSeq, submit_ids
 
-pytestmark = [pytest.mark.integration, pytest.mark.postgres, pytest.mark.nats]
+pytestmark = [
+    pytest.mark.integration,
+    pytest.mark.postgres,
+    pytest.mark.nats,
+    pytest.mark.benchmark_correctness,
+]
 
 
 class FixedMessageIds:

@@ -35,7 +35,7 @@ from stateback.providers.github.transport import UrllibGitHubTransport
 from stateback.providers.reference.clock import FixedClock
 from tests.unit.domain.fixtures import TS
 
-pytestmark = pytest.mark.contract
+pytestmark = [pytest.mark.contract, pytest.mark.benchmark_correctness]
 
 OPERATION_ID = OpaqueId(value="00000000-0000-4000-8000-00000000a001")
 ATTEMPT_ID = OpaqueId(value="00000000-0000-4000-8000-00000000a002")

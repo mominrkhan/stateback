@@ -43,7 +43,11 @@ from tests.integration.runtime.conftest import (
 )
 from tests.integration.runtime.idseq import IdSeq, submit_ids
 
-pytestmark = [pytest.mark.integration, pytest.mark.postgres]
+pytestmark = [
+    pytest.mark.integration,
+    pytest.mark.postgres,
+    pytest.mark.benchmark_correctness,
+]
 
 APPROVER = PrincipalRef(
     type=PrincipalType.HUMAN,

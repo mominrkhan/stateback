@@ -25,7 +25,11 @@ from tests.integration.runtime.conftest import (
 )
 from tests.integration.runtime.idseq import execute_ids, submit_ids
 
-pytestmark = [pytest.mark.integration, pytest.mark.postgres]
+pytestmark = [
+    pytest.mark.integration,
+    pytest.mark.postgres,
+    pytest.mark.benchmark_correctness,
+]
 
 
 def test_lost_execute_response_verify_store_reaches_succeeded(

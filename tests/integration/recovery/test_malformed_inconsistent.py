@@ -16,7 +16,11 @@ from tests.integration.recovery.conftest import (
 from tests.integration.recovery.idseq import IdSeq
 from tests.integration.runtime.conftest import load_attempts
 
-pytestmark = [pytest.mark.integration, pytest.mark.postgres]
+pytestmark = [
+    pytest.mark.integration,
+    pytest.mark.postgres,
+    pytest.mark.benchmark_correctness,
+]
 
 
 def test_verify_malformed_stays_unknown(

@@ -21,7 +21,11 @@ from tests.integration.runtime.conftest import (
 )
 from tests.integration.runtime.idseq import IdSeq, execute_ids, submit_ids
 
-pytestmark = [pytest.mark.integration, pytest.mark.postgres]
+pytestmark = [
+    pytest.mark.integration,
+    pytest.mark.postgres,
+    pytest.mark.benchmark_correctness,
+]
 
 
 def test_two_threads_claim_one_winner_one_in_flight_or_already_applied(
