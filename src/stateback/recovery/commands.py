@@ -44,4 +44,5 @@ class OperatorVerificationCommand:
     expected_version: int
     ids: RecoveryIds
     actor: PrincipalRef
+    reason_code: str
     correlation_id: str | None

@@ -6,6 +6,9 @@ readme = "README.md"
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "alembic==1.19.1",
+    "fastapi==0.141.1",
+    "httpx==0.28.1",
+    "mcp==2.0.0",
     "nats-py==2.15.0",
     "psycopg[binary]==3.3.4",
     "sqlalchemy==2.0.52",
@@ -68,4 +71,6 @@ markers = [
     "failure: reserved for later phases; do not use in Phase 2",
     "contract: canonical contract serialization and enum tests",
     "github_sandbox: opt-in tests that mutate an isolated GitHub repository",
+    "benchmark_correctness: deterministic Phase 17 correctness evidence",
+    "benchmark_performance: reproducible Phase 17 performance measurements",
 ]

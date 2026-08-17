@@ -5,6 +5,7 @@ from __future__ import annotations
 from sqlalchemy.orm import Session, sessionmaker
 
 from stateback.domain.enums import OperationState, VerificationMode
+from stateback.domain.secrets import key_is_forbidden, value_is_forbidden
 from stateback.persistence.exceptions import (
     ConcurrencyConflictError,
     NotFoundError,
@@ -38,6 +39,13 @@ def start_operator_verification(
     command: OperatorVerificationCommand,
     crash_after: RecoveryCrashPoint | None,
 ) -> RecoveryResult:
+    if (
+        not command.reason_code
+        or len(command.reason_code) > 200
+        or key_is_forbidden(command.reason_code)
+        or value_is_forbidden(command.reason_code)
+    ):
+        return make_recovery_result(RecoveryDisposition.REJECTED, "invalid_reason_code")
     try:
         op = load_operation(uow_factory, command.operation_id)
     except NotFoundError:
@@ -76,7 +84,7 @@ def start_operator_verification(
                     occurred_at=clock.now(),
                     actor=command.actor,
                     correlation_id=command.correlation_id,
-                    reason_code="manual_start_verification",
+                    reason_code=command.reason_code,
                     transition_audit_event_id=ids.start_transition_audit_event_id,
                     verification_request=request,
                     operator_audit_event_id=ids.manual_audit_event_id,

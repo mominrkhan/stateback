@@ -234,6 +234,12 @@ class OperationRepository(_SessionOps):
         )
         return [operation_from_row(row) for row in self.session.scalars(stmt)]
 
+    def list_all(self) -> list[Operation]:
+        stmt = select(OperationRow).order_by(
+            OperationRow.created_at.desc(), OperationRow.operation_id
+        )
+        return [operation_from_row(row) for row in self.session.scalars(stmt)]
+
     def update_cas(self, expected_version: int, operation: Operation) -> None:
         if operation.version != expected_version + 1:
             raise ConcurrencyConflictError("CAS version must be expected_version + 1")
