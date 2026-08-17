@@ -10,6 +10,7 @@ from stateback.policy.evaluation import (
 )
 from stateback.policy.inputs import PolicyInputs
 from stateback.policy.protocol import PolicyEngine
+from stateback.policy.rules import PolicyRule, RulePolicyEngine
 from stateback.policy.scripted import ScriptedPolicyEngine
 
 __all__ = [
@@ -17,7 +18,9 @@ __all__ = [
     "PHASE5_DEFAULT_OBLIGATIONS",
     "PHASE5_POLICY_REVISION",
     "PolicyEngine",
+    "PolicyRule",
     "PolicyEvaluation",
+    "RulePolicyEngine",
     "PolicyInputs",
     "ScriptedPolicyEngine",
 ]
