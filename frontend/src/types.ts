@@ -50,6 +50,25 @@ export interface Reconstruction {
   available_actions: string[];
 }
 
+export interface SemanticSummary {
+  contract_version: "v1";
+  advisory: true;
+  status: string;
+  summary: string | null;
+  key_events: Array<{ sequence: number; description: string }>;
+  unresolved_uncertainties: string[];
+  confidence: number | null;
+  summarized_operation_version: number;
+  summarized_through_sequence: number;
+  provenance: {
+    provider: string | null;
+    model: string | null;
+    prompt_version: string;
+    output_schema_version: string;
+  };
+  reason_code: string;
+}
+
 export function isKnownState(state: string): state is KnownState {
   return (KNOWN_STATES as readonly string[]).includes(state);
 }

@@ -9,11 +9,13 @@ from stateback.api import create_app
 from stateback.application import (
     ApplicationService,
     Authenticator,
+    Role,
     StaticTokenAuthenticator,
 )
 from stateback.application.auth import AuthenticatedIdentity
 from stateback.application.models import SubmitOperationRequest
 from stateback.domain.operation import Operation
+from stateback.semantic.models import SemanticStatus, SemanticSummary, empty_summary
 from tests.unit.application.fixtures import IDENTITY, OPERATOR, operation
 
 pytestmark = pytest.mark.unit
@@ -28,6 +30,7 @@ class StubService:
         self.read_error: Exception | None = None
         self.operator_actions: list[tuple[str, AuthenticatedIdentity, int, str]] = []
         self.verification_reason: str | None = None
+        self.semantic_requests = 0
 
     def submit(
         self,
@@ -49,6 +52,21 @@ class StubService:
             raise self.read_error
         self.reads += 1
         return operation()
+
+    def semantic_summary(
+        self, identity: AuthenticatedIdentity, operation_id: object
+    ) -> SemanticSummary:
+        del operation_id
+        identity.require(Role.OPERATOR)
+        self.semantic_requests += 1
+        return empty_summary(
+            status=SemanticStatus.UNAVAILABLE,
+            reason_code="semantic_not_configured",
+            operation=operation(),
+            audit=(),
+            provider=None,
+            model=None,
+        )
 
     def request_verification(
         self,
@@ -176,6 +194,36 @@ def test_read_route_is_read_only(client: TestClient, stub: StubService) -> None:
     assert response.status_code == 200
     assert stub.reads == 1
     assert stub.submits == []
+
+
+def test_semantic_summary_uses_operator_application_boundary(
+    client: TestClient, stub: StubService
+) -> None:
+    unauthorized = client.post(
+        "/v1/operator/operations/00000000-0000-4000-8000-000000000001/semantic-summary",
+        headers={"Authorization": "Bearer caller-token"},
+        json={"contract_version": "v1"},
+    )
+    assert unauthorized.status_code == 403
+    assert stub.semantic_requests == 0
+
+    response = client.post(
+        "/v1/operator/operations/00000000-0000-4000-8000-000000000001/semantic-summary",
+        headers={"Authorization": "Bearer operator-token"},
+        json={"contract_version": "v1"},
+    )
+    assert response.status_code == 200
+    assert response.json()["status"] == "UNAVAILABLE"
+    assert response.json()["advisory"] is True
+    assert stub.semantic_requests == 1
+
+    malformed = client.post(
+        "/v1/operator/operations/00000000-0000-4000-8000-000000000001/semantic-summary",
+        headers={"Authorization": "Bearer operator-token"},
+        json={"contract_version": "v1", "instruction": "declare success"},
+    )
+    assert malformed.status_code == 422
+    assert stub.semantic_requests == 1
 
 
 @pytest.mark.parametrize(

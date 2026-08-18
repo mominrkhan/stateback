@@ -35,6 +35,10 @@ dt { color: #91a8a1; } dd { margin: 0; overflow-wrap: anywhere; }
 .timeline { padding-left: 1.3rem; }
 .timeline li { display: grid; gap: .25rem; padding: .6rem; }
 .timeline time, .timeline code { color: #91a8a1; font-size: .75rem; }
+.semantic { margin-top: 1.5rem; background: #10251f; border-style: dashed; }
+.semantic h3 { margin: 0; }
+.advisory-label { color: #ffd67a; font-size: .82rem; }
+.semantic small { color: #91a8a1; }
 .login { max-width: 32rem; }
 .login form { display: grid; gap: .8rem; }
 .login input { padding: .7rem; color: white; border: 1px solid #4d7167; background: #0b201a; border-radius: .45rem; }

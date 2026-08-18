@@ -41,6 +41,8 @@ from stateback.recovery.service import RecoveryService
 from stateback.runtime.commands import SubmitCommand
 from stateback.runtime.results import RuntimeDisposition
 from stateback.runtime.service import SynchronousRuntime
+from stateback.semantic.models import SemanticStatus, SemanticSummary, empty_summary
+from stateback.semantic.service import AuditSummaryService
 
 
 class ApplicationServiceError(Exception):
@@ -190,6 +192,7 @@ class ApplicationService:
         recovery: RecoveryService | None = None,
         compensation: CompensationService | None = None,
         registry: CapabilityRegistry | None = None,
+        semantic_summaries: AuditSummaryService | None = None,
     ) -> None:
         self._factory = session_factory
         self._runtime = runtime
@@ -197,6 +200,7 @@ class ApplicationService:
         self._recovery = recovery
         self._compensation = compensation
         self._registry = registry
+        self._semantic_summaries = semantic_summaries
 
     def _available_actions(
         self,
@@ -421,6 +425,24 @@ class ApplicationService:
                     attempts=attempts,
                 ),
             )
+
+    def semantic_summary(
+        self, identity: AuthenticatedIdentity, operation_id: OpaqueId
+    ) -> SemanticSummary:
+        reconstruction = self.reconstruct(identity, operation_id)
+        if self._semantic_summaries is None:
+            return empty_summary(
+                status=SemanticStatus.UNAVAILABLE,
+                reason_code="semantic_not_configured",
+                operation=reconstruction.operation,
+                audit=reconstruction.audit,
+                provider=None,
+                model=None,
+            )
+        return self._semantic_summaries.summarize(
+            operation=reconstruction.operation,
+            audit=reconstruction.audit,
+        )
 
     def decide_approval(
         self,

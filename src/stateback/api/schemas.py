@@ -41,3 +41,7 @@ class OperatorActionSchema(StrictModel):
     reason: Annotated[
         str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)
     ]
+
+
+class SemanticSummaryRequestSchema(StrictModel):
+    contract_version: Literal["v1"]

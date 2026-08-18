@@ -9,6 +9,7 @@ from fastapi.responses import JSONResponse
 from stateback.api.schemas import (
     ApprovalActionSchema,
     OperatorActionSchema,
+    SemanticSummaryRequestSchema,
     SubmitOperationSchema,
 )
 from stateback.application.auth import (
@@ -198,6 +199,16 @@ def create_app(*, service: ApplicationService, authenticator: Authenticator) -> 
         operation_id: str, identity: Identity
     ) -> dict[str, object]:
         return service.reconstruct(identity, OpaqueId.from_wire(operation_id)).to_wire()
+
+    @app.post("/v1/operator/operations/{operation_id}/semantic-summary")
+    def summarize_operation(
+        operation_id: str,
+        _body: SemanticSummaryRequestSchema,
+        identity: Identity,
+    ) -> dict[str, object]:
+        return service.semantic_summary(
+            identity, OpaqueId.from_wire(operation_id)
+        ).to_wire()
 
     @app.post("/v1/operator/operations/{operation_id}/approval", status_code=202)
     def decide_approval(

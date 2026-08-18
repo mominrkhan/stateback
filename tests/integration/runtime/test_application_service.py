@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session, sessionmaker
@@ -33,6 +35,11 @@ from stateback.providers.reference.effects import EFFECT_MUTATE_NONE
 from stateback.providers.reference.scripts import ReferenceExecuteScript
 from stateback.providers.registry import CapabilityRegistry
 from stateback.runtime import SynchronousRuntime
+from stateback.semantic import (
+    AuditSummaryService,
+    DeterministicSemanticModel,
+    SemanticStatus,
+)
 from tests.integration.runtime.conftest import make_submit, rebuild_runtime
 from tests.integration.runtime.idseq import IdSeq, execute_ids
 from tests.unit.domain.fixtures import REQUESTER
@@ -94,6 +101,48 @@ def test_public_idempotency_status_audit_and_operator_reconstruction(
     assert reconstruction.operation == first
     assert reconstruction.policy_decisions
     assert reconstruction.audit
+
+
+def test_semantic_summary_is_optional_read_only_and_non_authoritative(
+    uow_factory: sessionmaker[Session], runtime: SynchronousRuntime
+) -> None:
+    base_service = ApplicationService(session_factory=uow_factory, runtime=runtime)
+    submitted = base_service.submit(
+        identity=CALLER, idempotency_key="semantic-request", request=_request()
+    )
+    before = base_service.reconstruct(OPERATOR, submitted.operation_id)
+    unavailable = base_service.semantic_summary(OPERATOR, submitted.operation_id)
+    assert unavailable.status is SemanticStatus.UNAVAILABLE
+    assert unavailable.reason_code == "semantic_not_configured"
+
+    model = DeterministicSemanticModel(
+        content=json.dumps(
+            {
+                "status": "AVAILABLE",
+                "summary": "The operation is ready for deterministic execution.",
+                "key_events": [
+                    {"sequence": before.audit[0].sequence, "description": "Created"}
+                ],
+                "unresolved_uncertainties": [],
+                "confidence": 0.9,
+            }
+        )
+    )
+    semantic_service = ApplicationService(
+        session_factory=uow_factory,
+        runtime=runtime,
+        semantic_summaries=AuditSummaryService(semantic_model=model),
+    )
+    summary = semantic_service.semantic_summary(OPERATOR, submitted.operation_id)
+    after = semantic_service.reconstruct(OPERATOR, submitted.operation_id)
+    assert summary.status is SemanticStatus.AVAILABLE
+    assert after.operation == before.operation
+    assert after.audit == before.audit
+    assert after.available_actions == before.available_actions
+    assert "arguments" not in model.prompts[0]
+
+    with pytest.raises(AuthorizationError, match="insufficient_role"):
+        semantic_service.semantic_summary(CALLER, submitted.operation_id)
 
 
 def test_idempotency_conflict_and_cross_caller_read_denied(
@@ -183,6 +232,14 @@ def test_http_api_end_to_end_uses_same_service_and_operator_boundary(
     assert reconstructed.status_code == 200
     assert reconstructed.json()["operation"]["state"] == "READY"
     assert reconstructed.json()["audit"]
+    semantic = client.post(
+        f"/v1/operator/operations/{operation_id}/semantic-summary",
+        headers={"Authorization": "Bearer operator-token"},
+        json={"contract_version": "v1"},
+    )
+    assert semantic.status_code == 200
+    assert semantic.json()["status"] == "UNAVAILABLE"
+    assert semantic.json()["advisory"] is True
 
 
 @pytest.mark.parametrize(

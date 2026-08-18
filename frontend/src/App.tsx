@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { OperatorApi } from "./api";
-import type { Operation, Reconstruction } from "./types";
+import type { Operation, Reconstruction, SemanticSummary } from "./types";
 import { isKnownState } from "./types";
 import "./styles.css";
 
@@ -32,6 +32,10 @@ export function App({ api }: { api: OperatorApi }) {
   const [detail, setDetail] = useState<Reconstruction | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
+  const [semantic, setSemantic] = useState<SemanticSummary | null>(null);
+  const [semanticPending, setSemanticPending] = useState(false);
+  const semanticGeneration = useRef(0);
+  const selectedOperationId = useRef<string | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -45,23 +49,64 @@ export function App({ api }: { api: OperatorApi }) {
   useEffect(() => void load(), [load]);
 
   async function select(operation: Operation) {
+    const generation = semanticGeneration.current + 1;
+    semanticGeneration.current = generation;
+    selectedOperationId.current = operation.operation_id;
+    setSemantic(null);
+    setSemanticPending(false);
+    setDetail(null);
     try {
       setError(null);
-      setDetail(await api.reconstruct(operation.operation_id));
+      const reconstruction = await api.reconstruct(operation.operation_id);
+      if (semanticGeneration.current === generation) setDetail(reconstruction);
     } catch (cause) {
+      if (semanticGeneration.current !== generation) return;
       setError(cause instanceof Error ? cause.message : "Unable to load operation");
+    }
+  }
+
+  async function summarize() {
+    if (!detail) return;
+    const operationId = detail.operation.operation_id;
+    const operationVersion = detail.operation.version;
+    const generation = semanticGeneration.current + 1;
+    semanticGeneration.current = generation;
+    setSemanticPending(true);
+    setError(null);
+    try {
+      const result = await api.summarize(operationId);
+      if (
+        semanticGeneration.current !== generation
+        || selectedOperationId.current !== operationId
+      ) return;
+      if (result.summarized_operation_version !== operationVersion) {
+        setSemantic(null);
+        setError("Operation changed while semantic assistance was running");
+        return;
+      }
+      setSemantic(result);
+    } catch (cause) {
+      if (semanticGeneration.current !== generation) return;
+      setError(cause instanceof Error ? cause.message : "Semantic assistance unavailable");
+    } finally {
+      if (semanticGeneration.current === generation) setSemanticPending(false);
     }
   }
 
   async function act(action: string, label: string) {
     if (!detail || !window.confirm(`${label} for operation ${detail.operation.operation_id}?`)) return;
+    const operationId = detail.operation.operation_id;
     const reason = window.prompt("Operator reason")?.trim();
     if (!reason) return;
+    semanticGeneration.current += 1;
+    setSemantic(null);
+    setSemanticPending(false);
     setPending(true);
     setError(null);
     try {
       await api.control(detail.operation, action, reason);
-      setDetail(await api.reconstruct(detail.operation.operation_id));
+      const reconstruction = await api.reconstruct(operationId);
+      if (selectedOperationId.current === operationId) setDetail(reconstruction);
       await load();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Action was not accepted");
@@ -127,6 +172,46 @@ export function App({ api }: { api: OperatorApi }) {
                   </li>
                 ))}
               </ol>
+              <aside className="semantic" aria-labelledby="semantic-heading">
+                <div className="section-heading">
+                  <h3 id="semantic-heading">Advisory semantic summary</h3>
+                  <button disabled={semanticPending} onClick={() => void summarize()}>
+                    {semanticPending ? "Generating…" : "Generate summary"}
+                  </button>
+                </div>
+                <p className="advisory-label">
+                  Model-generated and non-authoritative. Use the durable timeline as evidence.
+                </p>
+                {semantic && semantic.status === "AVAILABLE" && semantic.summary && (
+                  <div>
+                    <p>{semantic.summary}</p>
+                    <p>Confidence: {semantic.confidence?.toFixed(2)}</p>
+                    {semantic.key_events.length > 0 && (
+                      <ul>
+                        {semantic.key_events.map((event) => (
+                          <li key={`${event.sequence}-${event.description}`}>
+                            Event {event.sequence}: {event.description}
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                    {semantic.unresolved_uncertainties.length > 0 && (
+                      <>
+                        <h4>Unresolved uncertainty</h4>
+                        <ul>
+                          {semantic.unresolved_uncertainties.map((item) => <li key={item}>{item}</li>)}
+                        </ul>
+                      </>
+                    )}
+                    <small>
+                      Summarized operation version {semantic.summarized_operation_version} through audit sequence {semantic.summarized_through_sequence}.
+                    </small>
+                  </div>
+                )}
+                {semantic && semantic.status !== "AVAILABLE" && (
+                  <p role="status">Semantic assistance {semantic.status.toLowerCase()}: {semantic.reason_code}</p>
+                )}
+              </aside>
             </>
           )}
         </section>

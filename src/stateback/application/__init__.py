@@ -16,10 +16,12 @@ from stateback.application.service import (
     OperationPage,
     OperationReconstruction,
 )
+from stateback.semantic import AuditSummaryService
 
 __all__ = [
     "ApplicationService",
     "ApplicationServiceError",
+    "AuditSummaryService",
     "AuditPage",
     "AuthenticatedIdentity",
     "AuthenticationError",

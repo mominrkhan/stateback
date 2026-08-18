@@ -1,8 +1,9 @@
-import type { Operation, Reconstruction } from "./types";
+import type { Operation, Reconstruction, SemanticSummary } from "./types";
 
 export interface OperatorApi {
   list(): Promise<Operation[]>;
   reconstruct(operationId: string): Promise<Reconstruction>;
+  summarize(operationId: string): Promise<SemanticSummary>;
   control(
     operation: Operation,
     action: string,
@@ -31,6 +32,63 @@ export function parseOperation(value: unknown): Operation {
   }
   object(raw.intent, "intent");
   return raw as unknown as Operation;
+}
+
+export function parseSemanticSummary(value: unknown): SemanticSummary {
+  const raw = object(value, "semantic summary");
+  const provenance = object(raw.provenance, "semantic provenance");
+  const statuses = new Set(["AVAILABLE", "ABSTAINED", "UNAVAILABLE", "INVALID"]);
+  const keyEventsValid = Array.isArray(raw.key_events) && raw.key_events.every((item) => {
+    const event = object(item, "semantic key event");
+    return Number.isInteger(event.sequence)
+      && typeof event.sequence === "number"
+      && event.sequence >= 1
+      && typeof raw.summarized_through_sequence === "number"
+      && event.sequence <= raw.summarized_through_sequence
+      && typeof event.description === "string"
+      && event.description.trim().length >= 1
+      && event.description.length <= 500;
+  });
+  const uncertaintiesValid = Array.isArray(raw.unresolved_uncertainties)
+    && raw.unresolved_uncertainties.length <= 20
+    && raw.unresolved_uncertainties.every(
+      (item) => typeof item === "string" && item.trim().length >= 1 && item.length <= 500,
+    );
+  const contentShapeValid = raw.status === "AVAILABLE"
+    ? typeof raw.summary === "string"
+      && raw.summary.trim().length >= 1
+      && raw.summary.length <= 2000
+      && typeof raw.confidence === "number"
+      && raw.confidence >= 0.5
+    : raw.summary === null
+      && raw.confidence === null
+      && Array.isArray(raw.key_events)
+      && raw.key_events.length === 0
+      && Array.isArray(raw.unresolved_uncertainties)
+      && raw.unresolved_uncertainties.length === 0;
+  if (
+    raw.contract_version !== "v1" ||
+    raw.advisory !== true ||
+    typeof raw.status !== "string" || !statuses.has(raw.status) ||
+    !contentShapeValid ||
+    !Array.isArray(raw.key_events) || raw.key_events.length > 20 ||
+    !keyEventsValid ||
+    !uncertaintiesValid ||
+    !(typeof raw.confidence === "number" || raw.confidence === null) ||
+    (typeof raw.confidence === "number" && (!Number.isFinite(raw.confidence) || raw.confidence < 0 || raw.confidence > 1)) ||
+    !Number.isInteger(raw.summarized_operation_version) ||
+    typeof raw.summarized_operation_version !== "number" || raw.summarized_operation_version < 1 ||
+    !Number.isInteger(raw.summarized_through_sequence) ||
+    typeof raw.summarized_through_sequence !== "number" || raw.summarized_through_sequence < 0 ||
+    typeof raw.reason_code !== "string" || raw.reason_code.length < 1 || raw.reason_code.length > 200 ||
+    !(provenance.provider === null || (typeof provenance.provider === "string" && provenance.provider.length >= 1 && provenance.provider.length <= 200)) ||
+    !(provenance.model === null || (typeof provenance.model === "string" && provenance.model.length >= 1 && provenance.model.length <= 200)) ||
+    provenance.prompt_version !== "audit-summary-v1" ||
+    provenance.output_schema_version !== "v1"
+  ) {
+    throw new Error("Unsupported or malformed semantic summary response");
+  }
+  return raw as unknown as SemanticSummary;
 }
 
 export function createOperatorApi(baseUrl: string, token: () => string): OperatorApi {
@@ -69,6 +127,14 @@ export function createOperatorApi(baseUrl: string, token: () => string): Operato
         throw new Error("Unsupported or malformed reconstruction response");
       }
       return { ...raw, operation: parseOperation(raw.operation) } as unknown as Reconstruction;
+    },
+    async summarize(operationId) {
+      return parseSemanticSummary(
+        await request(`/v1/operator/operations/${operationId}/semantic-summary`, {
+          method: "POST",
+          body: JSON.stringify({ contract_version: "v1" }),
+        }),
+      );
     },
     async control(operation, action, reason) {
       const suffix: Record<string, string> = {
