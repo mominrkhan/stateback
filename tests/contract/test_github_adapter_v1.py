@@ -9,9 +9,12 @@ from io import BytesIO
 import pytest
 
 from stateback.domain.capability import (
+    CompensationEvidence,
     CompensationRequest,
+    ExecutionEvidence,
     ProviderExecutionContext,
     ProviderExecutionRequest,
+    VerificationEvidence,
 )
 from stateback.domain.enums import (
     CONTRACT_VERSION,
@@ -31,7 +34,11 @@ from stateback.providers.github import (
     GitHubAdapter,
     GitHubHttpResponse,
 )
-from stateback.providers.github.transport import UrllibGitHubTransport
+from stateback.providers.github.transport import (
+    MAX_GITHUB_RESPONSE_BYTES,
+    GitHubResponseTooLarge,
+    UrllibGitHubTransport,
+)
 from stateback.providers.reference.clock import FixedClock
 from tests.unit.domain.fixtures import TS
 
@@ -189,6 +196,17 @@ def test_missing_credential_and_invalid_arguments_fail_before_network() -> None:
     rejected = adapter(transport).execute(context(), invalid)
     assert rejected.outcome is EffectOutcome.NOT_APPLIED
     assert transport.requests == []
+
+
+def test_non_secret_capability_signal_validates_without_provider_authority() -> None:
+    configured = GitHubAdapter.for_validation(
+        credential_configured=True, clock=FixedClock(TS)
+    )
+    assert configured.validate_execution(execution_request()).accepted is True
+    execution = configured.execute(context(), execution_request())
+    assert execution.outcome is EffectOutcome.UNKNOWN
+    assert execution.error is not None
+    assert execution.error.kind is ErrorKind.TRANSIENT_TRANSPORT
 
 
 def test_execute_appends_marker_and_returns_external_identity() -> None:
@@ -375,3 +393,159 @@ def test_urllib_transport_rejects_redirect_without_forwarding_token(
     assert result.error.code == "github.http.ambiguous"
     assert len(openers[0].requests) == 1
     assert openers[0].requests[0].full_url.startswith("https://api.github.com/")
+    assert openers[0].requests[0].get_header("User-agent") == "stateback/0.1.0"
+
+
+@pytest.mark.parametrize(
+    "api_url",
+    [
+        "http://api.github.com",
+        "https://token@api.github.com",
+        "https://api.github.com?destination=attacker.invalid",
+        "https://api.github.com#attacker",
+        "https://attacker.invalid",
+        "https://api.github.com:444",
+        "https://api.github.com/evil",
+        "https://api.github.com/",
+        "https://api.github.com\n",
+    ],
+)
+def test_urllib_transport_rejects_unsafe_api_origins(api_url: str) -> None:
+    with pytest.raises(ValueError, match="credential-free HTTPS origin"):
+        UrllibGitHubTransport(token="github_pat_test_only", api_url=api_url)
+
+
+class _OversizedResponse:
+    def __init__(self, status: int) -> None:
+        self.status = status
+        self.headers = HTTPMessage()
+
+    def __enter__(self) -> _OversizedResponse:
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        del args
+
+    def read(self, amount: int) -> bytes:
+        assert amount == MAX_GITHUB_RESPONSE_BYTES + 1
+        return b"x" * amount
+
+
+class _OversizedOpener:
+    def __init__(self, status: int) -> None:
+        self.status = status
+
+    def open(self, request: urllib.request.Request, *, timeout: float) -> object:
+        del request, timeout
+        return _OversizedResponse(self.status)
+
+
+@pytest.mark.parametrize("operation", ["execute", "verify", "compensate"])
+def test_oversized_success_response_remains_unknown_without_retaining_body(
+    monkeypatch: pytest.MonkeyPatch,
+    operation: str,
+) -> None:
+    monkeypatch.setattr(
+        urllib.request,
+        "build_opener",
+        lambda *handlers: _OversizedOpener(201 if operation == "execute" else 200),
+    )
+    github = GitHubAdapter(
+        transport=UrllibGitHubTransport(token="github_pat_test_only"),
+        clock=FixedClock(TS),
+    )
+    result: ExecutionEvidence | VerificationEvidence | CompensationEvidence
+    if operation == "execute":
+        result = github.execute(context(), execution_request())
+    elif operation == "verify":
+        result = github.verify(context(), verification(resources=("acme/sandbox#42",)))
+    else:
+        result = github.compensate(context(), compensation_request())
+    assert result.outcome is EffectOutcome.UNKNOWN
+    assert result.error is not None
+    assert "xxxxxxxx" not in str(result.to_wire())
+
+
+def test_oversized_http_error_response_raises_bounded_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class ErrorOpener:
+        def open(self, request: urllib.request.Request, *, timeout: float) -> object:
+            del timeout
+            raise urllib.error.HTTPError(
+                request.full_url,
+                422,
+                "Unprocessable Entity",
+                HTTPMessage(),
+                BytesIO(b"x" * (MAX_GITHUB_RESPONSE_BYTES + 1)),
+            )
+
+    monkeypatch.setattr(
+        urllib.request,
+        "build_opener",
+        lambda *handlers: ErrorOpener(),
+    )
+    transport = UrllibGitHubTransport(token="github_pat_test_only")
+    with pytest.raises(GitHubResponseTooLarge, match="supported size"):
+        transport.request(
+            method="POST",
+            path="/repos/acme/sandbox/issues",
+            body=b"{}",
+            timeout_seconds=1,
+        )
+
+
+@pytest.mark.parametrize(
+    ("field", "url"),
+    [
+        ("html_url", "https://attacker.invalid/acme/sandbox/issues/42"),
+        ("repository_url", "https://attacker.invalid/repos/acme/sandbox"),
+        ("html_url", "https://github.com@attacker.invalid/acme/sandbox/issues/42"),
+        ("html_url", "https://github.com/evil/acme/sandbox/issues/42"),
+        (
+            "repository_url",
+            "https://api.github.com/evil/repos/acme/sandbox",
+        ),
+    ],
+)
+def test_provider_identity_rejects_forged_github_urls(field: str, url: str) -> None:
+    transport = ScriptedTransport()
+    transport.enqueue(response(201, issue() | {field: url}))
+    result = adapter(transport).execute(context(), execution_request())
+    assert result.outcome is EffectOutcome.UNKNOWN
+    assert result.error is not None
+    assert result.error.kind is ErrorKind.MALFORMED_PROVIDER_RESPONSE
+
+
+@pytest.mark.parametrize(
+    ("field", "url"),
+    [
+        ("html_url", "https://github.com:abc/acme/sandbox/issues/42"),
+        ("repository_url", "https://[invalid/repos/acme/sandbox"),
+    ],
+)
+@pytest.mark.parametrize("operation", ["execute", "verify", "compensate"])
+def test_malformed_provider_url_syntax_remains_canonical_unknown(
+    field: str,
+    url: str,
+    operation: str,
+) -> None:
+    transport = ScriptedTransport()
+    payload = issue(state="closed" if operation == "compensate" else "open") | {
+        field: url
+    }
+    transport.enqueue(response(201 if operation == "execute" else 200, payload))
+    github = adapter(transport)
+    result: ExecutionEvidence | VerificationEvidence | CompensationEvidence
+    if operation == "execute":
+        result = github.execute(context(), execution_request())
+    elif operation == "verify":
+        result = github.verify(context(), verification(resources=("acme/sandbox#42",)))
+    else:
+        result = github.compensate(context(), compensation_request())
+    assert result.outcome is EffectOutcome.UNKNOWN
+    assert result.error is not None
+    assert result.error.kind in {
+        ErrorKind.MALFORMED_PROVIDER_RESPONSE,
+        ErrorKind.PROVIDER_INCONSISTENT,
+    }

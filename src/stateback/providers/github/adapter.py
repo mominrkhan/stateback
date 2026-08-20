@@ -92,6 +92,18 @@ class GitHubAdapter:
             )
         return cls(transport=UrllibGitHubTransport(token=token), clock=clock)
 
+    @classmethod
+    def for_validation(
+        cls, *, credential_configured: bool, clock: Clock
+    ) -> GitHubAdapter:
+        """Describe configured capability without giving this process a credential."""
+
+        return cls(
+            transport=_MissingCredentialTransport(),
+            clock=clock,
+            credential_configured=credential_configured,
+        )
+
     def supported_effects(self) -> tuple[EffectRef, ...]:
         return (EFFECT_CREATE_ISSUE,)
 

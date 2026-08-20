@@ -124,23 +124,35 @@ def issue_identity(
     )
 
 
-def _https_path(url: str) -> str | None:
-    parsed = urlparse(url)
-    if parsed.scheme != "https" or not parsed.netloc:
+def _https_path(url: str, *, host: str) -> str | None:
+    try:
+        parsed = urlparse(url)
+        invalid = (
+            parsed.scheme != "https"
+            or parsed.hostname != host
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.port is not None
+            or parsed.query
+            or parsed.fragment
+        )
+    except ValueError:
+        return None
+    if invalid:
         return None
     return unquote(parsed.path).rstrip("/").casefold()
 
 
 def _matches_issue_url(url: str, owner: str, repo: str, number: int) -> bool:
-    path = _https_path(url)
+    path = _https_path(url, host="github.com")
     expected = f"/{owner}/{repo}/issues/{number}".casefold()
-    return path is not None and path.endswith(expected)
+    return path == expected
 
 
 def _matches_repository_url(url: str, owner: str, repo: str) -> bool:
-    path = _https_path(url)
+    path = _https_path(url, host="api.github.com")
     expected = f"/repos/{owner}/{repo}".casefold()
-    return path is not None and path.endswith(expected)
+    return path == expected
 
 
 def first_issue_resource(

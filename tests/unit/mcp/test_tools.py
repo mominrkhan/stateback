@@ -9,6 +9,7 @@ from pydantic import ValidationError
 from stateback.application import ApplicationService
 from stateback.application.auth import AuthenticatedIdentity
 from stateback.application.models import SubmitOperationRequest
+from stateback.domain.exceptions import ContractValidationError
 from stateback.domain.operation import Operation
 from stateback.mcp import StatebackMcpTools, create_mcp_server
 from tests.unit.application.fixtures import IDENTITY, operation
@@ -93,6 +94,23 @@ def test_malicious_escape_hatch_argument_is_rejected() -> None:
                 "shell": "rm -rf /",
             }
         )
+
+
+def test_oversize_mcp_argument_is_rejected_before_submission() -> None:
+    stub = StubService()
+    tools = StatebackMcpTools(service=cast(ApplicationService, stub), identity=IDENTITY)
+    with pytest.raises(ContractValidationError, match="supported length"):
+        tools.submit(
+            {
+                "provider": "reference",
+                "action": "create_resource",
+                "effect_version": "v1",
+                "arguments": {"value": "x" * 65_537},
+                "idempotency_key": "request-1",
+                "deployment_environment": "test",
+            }
+        )
+    assert stub.submitted is None
 
 
 def test_mcp_server_exposes_only_bounded_tools() -> None:

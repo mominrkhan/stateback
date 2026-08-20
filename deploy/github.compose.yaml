@@ -1,0 +1,13 @@
+services:
+  api:
+    environment:
+      STATEBACK_GITHUB_CONFIGURED: "1"
+  worker:
+    environment:
+      STATEBACK_GITHUB_TOKEN_FILE: /run/secrets/github_token
+    secrets:
+      - github_token
+
+secrets:
+  github_token:
+    file: ${STATEBACK_GITHUB_TOKEN_FILE:?set STATEBACK_GITHUB_TOKEN_FILE}

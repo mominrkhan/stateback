@@ -1,0 +1,26 @@
+services:
+  quarantine:
+    image: ghcr.io/mominrkhan/stateback:${STATEBACK_VERSION:-0.1.0}
+    command: ["quarantine-inspect"]
+    profiles: ["operator"]
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    user: "10001:10001"
+    environment:
+      STATEBACK_NATS_QUARANTINE_URL_FILE: /run/secrets/nats_quarantine_url
+      STATEBACK_NATS_REPLICAS: "1"
+    secrets: [nats_quarantine_url]
+    networks: [backend]
+    depends_on:
+      nats:
+        condition: service_healthy
+      nats-init:
+        condition: service_completed_successfully
+    restart: "no"
+
+secrets:
+  nats_quarantine_url:
+    file: ${STATEBACK_NATS_QUARANTINE_URL_FILE:?set STATEBACK_NATS_QUARANTINE_URL_FILE}

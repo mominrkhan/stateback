@@ -12,7 +12,7 @@ pytestmark = pytest.mark.unit
 def test_import_stateback_version() -> None:
     import stateback
 
-    assert stateback.__version__ == "0.0.0"
+    assert stateback.__version__ == "0.1.0"
 
 
 def test_import_does_not_open_sockets_or_connect_to_postgres() -> None:
@@ -43,7 +43,7 @@ def test_import_does_not_open_sockets_or_connect_to_postgres() -> None:
         runtime = importlib.import_module("stateback.runtime")
         recovery = importlib.import_module("stateback.recovery")
         compensation = importlib.import_module("stateback.compensation")
-    assert module.__version__ == "0.0.0"
+    assert module.__version__ == "0.1.0"
     assert domain.CONTRACT_VERSION == "v1"
     assert hasattr(persistence, "create_engine_from_env")
     assert hasattr(transitions, "TransitionService")

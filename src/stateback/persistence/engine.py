@@ -1,16 +1,28 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 from sqlalchemy import Engine, create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
 
 def require_database_url() -> str:
-    url = os.environ.get("STATEBACK_DATABASE_URL")
-    if not url:
+    file_path = os.environ.get("STATEBACK_DATABASE_URL_FILE")
+    if file_path is not None:
+        try:
+            url = Path(file_path).read_text(encoding="utf-8").strip()
+        except (OSError, UnicodeError) as exc:
+            raise RuntimeError("STATEBACK_DATABASE_URL_FILE cannot be read") from exc
+        if not url or len(url) > 4096 or "\n" in url:
+            raise RuntimeError(
+                "STATEBACK_DATABASE_URL_FILE must contain one bounded database URL"
+            )
+        return url
+    env_url = os.environ.get("STATEBACK_DATABASE_URL")
+    if not env_url:
         raise RuntimeError("STATEBACK_DATABASE_URL is required")
-    return url
+    return env_url
 
 
 def create_engine_from_url(url: str) -> Engine:

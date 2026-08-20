@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from sqlalchemy import func, select, update
+from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.orm import Session
 
@@ -12,6 +12,8 @@ from stateback.domain.enums import (
     AttemptState,
     ErrorKind,
     OperationState,
+    OutboxState,
+    WorkCommand,
 )
 from stateback.domain.ids import OpaqueId
 from stateback.domain.messaging import OutboxEvent
@@ -63,6 +65,7 @@ from stateback.persistence.models import (
 from stateback.persistence.types import (
     StoredReconciliationDecision,
     opaque_to_uuid,
+    uuid_to_opaque,
 )
 
 _DUPLICATE_CONSTRAINTS: dict[str, str] = {
@@ -601,6 +604,21 @@ class AuditRepository(_SessionOps):
         )
         return [audit_from_row(row) for row in self.session.scalars(stmt)]
 
+    def count_reason_for_command(
+        self,
+        operation_id: OpaqueId,
+        reason_code: str,
+        command: WorkCommand,
+        operation_version: int,
+    ) -> int:
+        stmt = select(func.count()).where(
+            AuditEventRow.operation_id == opaque_to_uuid(operation_id),
+            AuditEventRow.reason_code == reason_code,
+            AuditEventRow.data["command"].astext == command.value,
+            AuditEventRow.operation_version == operation_version,
+        )
+        return int(self.session.scalar(stmt) or 0)
+
     def next_sequence(self, operation_id: OpaqueId) -> int:
         """Return MAX(sequence)+1, or 1 if none.
 
@@ -642,6 +660,89 @@ class OutboxRepository(_SessionOps):
             .with_for_update(skip_locked=True)
         )
         return [outbox_from_row(row) for row in self.session.scalars(stmt)]
+
+    def list_stranded_candidate_ids(
+        self, cutoff: UtcTimestamp, limit: int
+    ) -> list[OpaqueId]:
+        """Find latest published work whose durable state still needs its command."""
+
+        if limit < 1:
+            raise PersistenceError(
+                "check_violation",
+                "limit must be >= 1",
+                error_kind=ErrorKind.PERSISTENCE,
+            )
+        newer = OutboxEventRow.__table__.alias("newer_outbox")
+        no_newer = (
+            ~select(newer.c.event_id)
+            .where(
+                newer.c.aggregate_id == OutboxEventRow.aggregate_id,
+                or_(
+                    newer.c.created_at > OutboxEventRow.created_at,
+                    and_(
+                        newer.c.created_at == OutboxEventRow.created_at,
+                        newer.c.event_id > OutboxEventRow.event_id,
+                    ),
+                ),
+            )
+            .exists()
+        )
+        applicable = or_(
+            and_(
+                OutboxEventRow.command == WorkCommand.EXECUTE.value,
+                OperationRow.state.in_(
+                    (OperationState.READY.value, OperationState.EXECUTING.value)
+                ),
+            ),
+            and_(
+                OutboxEventRow.command == WorkCommand.VERIFY.value,
+                OperationRow.state.in_(
+                    (
+                        OperationState.EXECUTING.value,
+                        OperationState.UNKNOWN.value,
+                        OperationState.VERIFYING.value,
+                        OperationState.COMPENSATING.value,
+                        OperationState.COMPENSATION_UNKNOWN.value,
+                    )
+                ),
+            ),
+            and_(
+                OutboxEventRow.command == WorkCommand.COMPENSATE.value,
+                OperationRow.state.in_(
+                    (
+                        OperationState.COMPENSATING.value,
+                        OperationState.COMPENSATION_UNKNOWN.value,
+                        OperationState.COMPENSATION_FAILED.value,
+                        OperationState.COMPENSATED.value,
+                    )
+                ),
+            ),
+        )
+        stmt = (
+            select(OutboxEventRow.event_id)
+            .join(
+                OperationRow, OperationRow.operation_id == OutboxEventRow.aggregate_id
+            )
+            .where(
+                OutboxEventRow.state == OutboxState.PUBLISHED.value,
+                OutboxEventRow.published_at <= cutoff.value,
+                no_newer,
+                applicable,
+            )
+            .order_by(OutboxEventRow.published_at, OutboxEventRow.event_id)
+            .limit(limit)
+        )
+        return [uuid_to_opaque(value) for value in self.session.scalars(stmt)]
+
+    def latest_for_operation(self, operation_id: OpaqueId) -> OutboxEvent | None:
+        stmt = (
+            select(OutboxEventRow)
+            .where(OutboxEventRow.aggregate_id == opaque_to_uuid(operation_id))
+            .order_by(OutboxEventRow.created_at.desc(), OutboxEventRow.event_id.desc())
+            .limit(1)
+        )
+        row = self.session.scalars(stmt).one_or_none()
+        return None if row is None else outbox_from_row(row)
 
     def mark_published(self, event_id: OpaqueId, published_at: UtcTimestamp) -> None:
         row = self.session.get(OutboxEventRow, opaque_to_uuid(event_id))

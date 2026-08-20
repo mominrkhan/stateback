@@ -16,6 +16,7 @@ from stateback.application.ids import (
     request_identity,
     submit_ids,
 )
+from stateback.application.input_validation import validate_metadata
 from stateback.application.models import OperationSearch, SubmitOperationRequest
 from stateback.approval.commands import ApprovalDecisionCommand
 from stateback.approval.results import ApprovalDisposition
@@ -287,6 +288,11 @@ class ApplicationService:
             or not idempotency_key.isascii()
         ):
             raise ApplicationServiceError("invalid_idempotency_key")
+        validate_metadata(request.metadata)
+        if correlation_id is not None:
+            correlation_id = _validated_operator_text(
+                correlation_id, code="invalid_correlation_id", limit=200
+            )
         stable_identity = request_identity(identity.principal, idempotency_key)
         result = self._runtime.submit(
             SubmitCommand(

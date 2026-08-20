@@ -102,6 +102,11 @@ class CancelReady(_OperationCommand):
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
+class ReadyMessagingRecoveryExhausted(_OperationCommand):
+    pass
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
 class ExecutionApplied(_OperationCommand):
     completed_attempt: ExecutionAttempt
     evidence_audit_event_id: OpaqueId
@@ -136,6 +141,11 @@ class ExecutionUnknown(_OperationCommand):
     completed_attempt: ExecutionAttempt | None
     evidence_audit_event_id: OpaqueId
     outbox_event_id: OpaqueId
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class ExecutionMessagingRecoveryExhausted(_OperationCommand):
+    pass
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -383,11 +393,13 @@ OperationTransitionCommand = (
     | CancelAwaitingApproval
     | ClaimExecution
     | CancelReady
+    | ReadyMessagingRecoveryExhausted
     | ExecutionApplied
     | ExecutionRequireVerification
     | ExecutionNotAppliedRetry
     | ExecutionNotAppliedFail
     | ExecutionUnknown
+    | ExecutionMessagingRecoveryExhausted
     | VerificationApplied
     | VerificationNotAppliedRetry
     | VerificationNotAppliedFail
@@ -435,11 +447,17 @@ COMMAND_TYPE_TO_KIND: dict[type, TransitionKind | CompensationProgressKind] = {
     CancelAwaitingApproval: TransitionKind.CANCEL_AWAITING_APPROVAL,
     ClaimExecution: TransitionKind.CLAIM_EXECUTION,
     CancelReady: TransitionKind.CANCEL_READY,
+    ReadyMessagingRecoveryExhausted: (
+        TransitionKind.READY_MESSAGING_RECOVERY_EXHAUSTED
+    ),
     ExecutionApplied: TransitionKind.EXECUTION_APPLIED,
     ExecutionRequireVerification: TransitionKind.EXECUTION_REQUIRE_VERIFICATION,
     ExecutionNotAppliedRetry: TransitionKind.EXECUTION_NOT_APPLIED_RETRY,
     ExecutionNotAppliedFail: TransitionKind.EXECUTION_NOT_APPLIED_FAIL,
     ExecutionUnknown: TransitionKind.EXECUTION_UNKNOWN,
+    ExecutionMessagingRecoveryExhausted: (
+        TransitionKind.EXECUTION_MESSAGING_RECOVERY_EXHAUSTED
+    ),
     VerificationApplied: TransitionKind.VERIFICATION_APPLIED,
     VerificationNotAppliedRetry: TransitionKind.VERIFICATION_NOT_APPLIED_RETRY,
     VerificationNotAppliedFail: TransitionKind.VERIFICATION_NOT_APPLIED_FAIL,

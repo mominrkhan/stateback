@@ -14,12 +14,18 @@ from sqlalchemy.orm import Session, sessionmaker
 from stateback.compensation.service import CompensationService
 from stateback.domain.enums import (
     CONTRACT_VERSION,
+    AuditEventType,
+    EffectOutcome,
+    IdempotencyMode,
     OperationState,
     OutboxState,
+    PrincipalType,
     WorkCommand,
 )
 from stateback.domain.ids import OpaqueId
+from stateback.domain.jsonutil import json_to_plain
 from stateback.domain.messaging import WorkMessageV1
+from stateback.domain.refs import PrincipalRef
 from stateback.messaging.codec import encode_work_message
 from stateback.messaging.nats import JetStreamConsumer, JetStreamPublisher
 from stateback.messaging.relay import OutboxRelay
@@ -33,6 +39,10 @@ from stateback.recovery.service import RecoveryService
 from stateback.runtime import SimulatedCrash
 from stateback.runtime.faults import RuntimeCrashPoint
 from stateback.runtime.service import SynchronousRuntime
+from stateback.transitions.commands import ManualSafeRetry
+from stateback.transitions.kinds import TransitionKind
+from stateback.transitions.results import TransitionOutcome
+from stateback.transitions.service import TransitionService
 from tests.integration.runtime.conftest import (
     load_operation,
     make_submit,
@@ -164,6 +174,170 @@ def test_publish_ack_loss_leaves_pending_and_republishes(
     assert len(failing.messages) == 1
     assert len(publisher.messages) == 1
     assert failing.messages[0][1] == publisher.messages[0][1]
+
+
+def test_published_message_loss_creates_new_auditable_outbox_history(
+    runtime: SynchronousRuntime,
+    uow_factory: sessionmaker[Session],
+    clock: FixedClock,
+    seq: IdSeq,
+) -> None:
+    submitted = runtime.submit(make_submit(seq))
+    assert submitted.operation is not None
+    publisher = RecordingPublisher()
+    relay = OutboxRelay(
+        session_factory=uow_factory,
+        publisher=publisher,
+        clock=clock,
+        message_ids=FixedMessageIds(),
+    )
+    assert asyncio.run(relay.publish_pending(limit=1)) == 1
+    original = WorkMessageV1.from_wire(json.loads(publisher.messages[0][1]))
+
+    clock.advance(301)
+    assert relay.recover_stranded(limit=10, after_seconds=300) == 1
+    assert relay.recover_stranded(limit=10, after_seconds=300) == 0
+    with unit_of_work(uow_factory) as uow:
+        original_event = uow.outbox_events.get(original.outbox_event_id)
+        latest = uow.outbox_events.latest_for_operation(original.operation_id)
+        audit = uow.audit_events.list_for_operation(original.operation_id)
+    assert original_event is not None
+    assert original_event.state is OutboxState.PUBLISHED
+    assert latest is not None
+    assert latest.event_id != original_event.event_id
+    assert latest.state is OutboxState.PENDING
+    assert latest.operation_version == submitted.operation.version
+    assert audit[-1].reason_code == "messaging.recovery_republished"
+
+    assert asyncio.run(relay.publish_pending(limit=1)) == 1
+    replay = WorkMessageV1.from_wire(json.loads(publisher.messages[-1][1]))
+    assert replay.outbox_event_id == latest.event_id
+    assert replay.operation_id == original.operation_id
+
+    for _ in range(2):
+        clock.advance(301)
+        assert relay.recover_stranded(limit=10, after_seconds=300) == 1
+        assert asyncio.run(relay.publish_pending(limit=1)) == 1
+    clock.advance(301)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        exhausted_results = list(
+            pool.map(
+                lambda _: relay.recover_stranded(limit=10, after_seconds=300),
+                range(2),
+            )
+        )
+    assert exhausted_results == [0, 0]
+    clock.advance(301)
+    assert relay.recover_stranded(limit=10, after_seconds=300) == 0
+    with unit_of_work(uow_factory) as uow:
+        audit = uow.audit_events.list_for_operation(original.operation_id)
+        exhausted_operation = uow.operations.get(original.operation_id)
+        manual_operations = uow.operations.list_by_state(
+            OperationState.MANUAL_INTERVENTION
+        )
+    assert exhausted_operation is not None
+    assert exhausted_operation.state is OperationState.MANUAL_INTERVENTION
+    assert exhausted_operation.version == submitted.operation.version + 1
+    assert [operation.operation_id for operation in manual_operations] == [
+        original.operation_id
+    ]
+    assert (
+        sum(event.reason_code == "messaging.recovery_republished" for event in audit)
+        == 3
+    )
+    assert (
+        sum(event.reason_code == "messaging.recovery_exhausted" for event in audit) == 1
+    )
+    assert json_to_plain(audit[-1].data) == {
+        "command": "EXECUTE",
+        "max_recoveries": 3,
+        "operator_intervention_required": True,
+    }
+    assert audit[-1].event_type is AuditEventType.OPERATION_TRANSITIONED
+    assert audit[-1].from_state is OperationState.READY
+    assert audit[-1].to_state is OperationState.MANUAL_INTERVENTION
+    assert audit[-1].operation_version == submitted.operation.version + 1
+
+    with unit_of_work(uow_factory) as uow:
+        resumed = TransitionService().apply(
+            uow,
+            ManualSafeRetry(
+                kind=TransitionKind.MANUAL_SAFE_RETRY,
+                operation_id=original.operation_id,
+                expected_version=exhausted_operation.version,
+                occurred_at=clock.now(),
+                actor=PrincipalRef(
+                    type=PrincipalType.OPERATOR,
+                    id="recovery-operator",
+                    display_name=None,
+                ),
+                correlation_id=None,
+                reason_code="operator_safe_retry",
+                transition_audit_event_id=seq.next(),
+                idempotency_mode=IdempotencyMode.NONE,
+                execution_outcome=EffectOutcome.NOT_APPLIED,
+                verification_outcome=None,
+                operator_audit_event_id=seq.next(),
+                outbox_event_id=seq.next(),
+            ),
+        )
+    assert resumed.outcome is TransitionOutcome.APPLIED
+    assert resumed.operation is not None
+    assert resumed.operation.state is OperationState.READY
+    assert asyncio.run(relay.publish_pending(limit=1)) == 1
+
+    for _ in range(3):
+        clock.advance(301)
+        assert relay.recover_stranded(limit=10, after_seconds=300) == 1
+        assert asyncio.run(relay.publish_pending(limit=1)) == 1
+    clock.advance(301)
+    assert relay.recover_stranded(limit=10, after_seconds=300) == 0
+    with unit_of_work(uow_factory) as uow:
+        resumed_exhausted = uow.operations.get(original.operation_id)
+        resumed_audit = uow.audit_events.list_for_operation(original.operation_id)
+    assert resumed_exhausted is not None
+    assert resumed_exhausted.state is OperationState.MANUAL_INTERVENTION
+    assert (
+        sum(
+            event.reason_code == "messaging.recovery_exhausted"
+            for event in resumed_audit
+        )
+        == 2
+    )
+
+
+def test_concurrent_recovery_scans_schedule_one_republish(
+    runtime: SynchronousRuntime,
+    uow_factory: sessionmaker[Session],
+    clock: FixedClock,
+    seq: IdSeq,
+) -> None:
+    submitted = runtime.submit(make_submit(seq))
+    assert submitted.operation is not None
+    relay = OutboxRelay(
+        session_factory=uow_factory,
+        publisher=RecordingPublisher(),
+        clock=clock,
+        message_ids=FixedMessageIds(),
+    )
+    assert asyncio.run(relay.publish_pending(limit=1)) == 1
+    clock.advance(301)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(
+            pool.map(
+                lambda _: relay.recover_stranded(limit=10, after_seconds=300),
+                range(2),
+            )
+        )
+    assert sorted(results) == [0, 1]
+
+    with unit_of_work(uow_factory) as uow:
+        audit = uow.audit_events.list_for_operation(submitted.operation.operation_id)
+    assert (
+        sum(event.reason_code == "messaging.recovery_republished" for event in audit)
+        == 1
+    )
 
 
 def test_worker_duplicate_delivery_executes_provider_once(

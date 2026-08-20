@@ -1,0 +1,200 @@
+name: stateback-production
+
+x-runtime: &runtime
+  image: ghcr.io/mominrkhan/stateback:${STATEBACK_VERSION:-0.1.0}
+  restart: unless-stopped
+  read_only: true
+  tmpfs:
+    - /tmp:size=64m,mode=1777
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  user: "10001:10001"
+  networks: [backend]
+
+services:
+  postgres:
+    image: postgres:16.15@sha256:e17e86066e5ef83e0952a9347f5c792b7ece00972e2aa787a6986f471b3dd3d5
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: stateback
+      POSTGRES_USER: stateback_owner
+      POSTGRES_PASSWORD_FILE: /run/secrets/database_owner_password
+    secrets: [database_owner_password, database_runtime_password]
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./postgres-init.sh:/docker-entrypoint-initdb.d/10-stateback-roles.sh:ro
+    networks: [backend]
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U stateback_owner -d stateback"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+
+  nats:
+    image: nats:2.12.6-alpine@sha256:1cfc36e2e5e638243d8c722f72c954cd0ec4b15ee82fadbc718ce12e2b3c1652
+    restart: unless-stopped
+    command: ["-c", "/run/secrets/nats_config"]
+    secrets: [nats_config]
+    volumes:
+      - nats_data:/data
+    networks: [backend]
+    healthcheck:
+      test: [CMD, wget, -q, -O, /dev/null, "http://127.0.0.1:8222/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+
+  migrate:
+    <<: *runtime
+    entrypoint: ["/bin/sh", "-c"]
+    command: ["alembic upgrade head && exec stateback db-privileges"]
+    environment:
+      STATEBACK_DATABASE_URL_FILE: /run/secrets/database_migration_url
+    secrets:
+      - database_migration_url
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  nats-init:
+    image: ghcr.io/mominrkhan/stateback:${STATEBACK_VERSION:-0.1.0}
+    command: ["nats-init"]
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    user: "10001:10001"
+    environment:
+      STATEBACK_NATS_BOOTSTRAP_URL_FILE: /run/secrets/nats_bootstrap_url
+      STATEBACK_NATS_REPLICAS: "1"
+      STATEBACK_WORKER_MAX_DELIVERIES: "5"
+    secrets: [nats_bootstrap_url]
+    networks: [backend]
+    depends_on:
+      nats:
+        condition: service_healthy
+    restart: "no"
+
+  api:
+    <<: *runtime
+    command: ["api"]
+    environment:
+      STATEBACK_DATABASE_URL_FILE: /run/secrets/database_runtime_url
+      STATEBACK_POLICY_CONFIG_FILE: /run/secrets/policy_config
+      STATEBACK_AUTH_CONFIG_FILE: /run/secrets/auth_config
+      STATEBACK_GITHUB_CONFIGURED: ${STATEBACK_GITHUB_CONFIGURED:-0}
+      STATEBACK_API_PORT: "8080"
+    secrets:
+      - database_runtime_url
+      - policy_config
+      - auth_config
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: [CMD, /app/.venv/bin/python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health/ready', timeout=2)"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+
+  relay:
+    <<: *runtime
+    command: ["relay"]
+    environment:
+      STATEBACK_DATABASE_URL_FILE: /run/secrets/database_runtime_url
+      STATEBACK_NATS_URL_FILE: /run/secrets/nats_url
+      STATEBACK_NATS_REPLICAS: "1"
+      STATEBACK_OUTBOX_RECOVERY_AFTER_SECONDS: ${STATEBACK_OUTBOX_RECOVERY_AFTER_SECONDS:-300}
+      STATEBACK_OUTBOX_RECOVERY_MAX_REPUBLISHES: ${STATEBACK_OUTBOX_RECOVERY_MAX_REPUBLISHES:-3}
+    secrets:
+      - database_runtime_url
+      - nats_url
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      nats-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: [CMD, stateback, health]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 5s
+
+  worker:
+    <<: *runtime
+    command: ["worker"]
+    environment:
+      STATEBACK_DATABASE_URL_FILE: /run/secrets/database_runtime_url
+      STATEBACK_NATS_URL_FILE: /run/secrets/nats_url
+      STATEBACK_POLICY_CONFIG_FILE: /run/secrets/policy_config
+      STATEBACK_NATS_REPLICAS: "1"
+    secrets:
+      - database_runtime_url
+      - nats_url
+      - policy_config
+    networks: [backend, provider_egress]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      nats-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: [CMD, stateback, health]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 5s
+
+  frontend:
+    image: ghcr.io/mominrkhan/stateback-frontend:${STATEBACK_VERSION:-0.1.0}
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+      - /var/cache/nginx:size=32m,uid=101,gid=101
+      - /var/run:size=1m,uid=101,gid=101
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    user: "101:101"
+    ports:
+      - "${STATEBACK_FRONTEND_BIND:-127.0.0.1:8080}:8080"
+    networks: [frontend, backend]
+    depends_on:
+      api:
+        condition: service_healthy
+
+networks:
+  frontend: {}
+  backend:
+    internal: true
+  provider_egress: {}
+
+volumes:
+  postgres_data: {}
+  nats_data: {}
+
+secrets:
+  database_owner_password:
+    file: ${STATEBACK_DATABASE_OWNER_PASSWORD_FILE:?set STATEBACK_DATABASE_OWNER_PASSWORD_FILE}
+  database_runtime_password:
+    file: ${STATEBACK_DATABASE_RUNTIME_PASSWORD_FILE:?set STATEBACK_DATABASE_RUNTIME_PASSWORD_FILE}
+  database_migration_url:
+    file: ${STATEBACK_DATABASE_MIGRATION_URL_FILE:?set STATEBACK_DATABASE_MIGRATION_URL_FILE}
+  database_runtime_url:
+    file: ${STATEBACK_DATABASE_RUNTIME_URL_FILE:?set STATEBACK_DATABASE_RUNTIME_URL_FILE}
+  nats_config:
+    file: ${STATEBACK_NATS_CONFIG_FILE:?set STATEBACK_NATS_CONFIG_FILE}
+  nats_url:
+    file: ${STATEBACK_NATS_URL_FILE:?set STATEBACK_NATS_URL_FILE}
+  nats_bootstrap_url:
+    file: ${STATEBACK_NATS_BOOTSTRAP_URL_FILE:?set STATEBACK_NATS_BOOTSTRAP_URL_FILE}
+  policy_config:
+    file: ${STATEBACK_POLICY_CONFIG_FILE:?set STATEBACK_POLICY_CONFIG_FILE}
+  auth_config:
+    file: ${STATEBACK_AUTH_CONFIG_FILE:?set STATEBACK_AUTH_CONFIG_FILE}

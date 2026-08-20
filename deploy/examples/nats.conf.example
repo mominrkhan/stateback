@@ -1,0 +1,64 @@
+port: 4222
+http_port: 8222
+
+jetstream {
+  store_dir: "/data"
+  max_file_store: 1GB
+}
+
+authorization {
+  users: [
+    {
+      user: "stateback"
+      password: "replace-with-a-random-nats-password"
+      permissions: {
+        publish: {
+          allow: [
+            "stateback.work.v1"
+            "stateback.quarantine.v1"
+            "$JS.API.STREAM.INFO.STATEBACK_V1"
+            "$JS.API.STREAM.INFO.STATEBACK_QUARANTINE_V1"
+            "$JS.API.CONSUMER.INFO.STATEBACK_V1.stateback-worker-v1"
+            "$JS.API.CONSUMER.INFO.STATEBACK_QUARANTINE_V1.stateback-quarantine-operator-v1"
+            "$JS.API.CONSUMER.MSG.NEXT.STATEBACK_V1.stateback-worker-v1"
+            "$JS.ACK.STATEBACK_V1.stateback-worker-v1.>"
+          ]
+        }
+        subscribe: ["_INBOX.>"]
+      }
+    }
+    {
+      user: "stateback_bootstrap"
+      password: "replace-with-a-distinct-random-bootstrap-password"
+      permissions: {
+        publish: [
+          "$JS.API.STREAM.INFO.STATEBACK_V1"
+          "$JS.API.STREAM.CREATE.STATEBACK_V1"
+          "$JS.API.CONSUMER.INFO.STATEBACK_V1.stateback-worker-v1"
+          "$JS.API.CONSUMER.CREATE.STATEBACK_V1.stateback-worker-v1.stateback.work.v1"
+          "$JS.API.CONSUMER.DURABLE.CREATE.STATEBACK_V1.stateback-worker-v1"
+          "$JS.API.STREAM.INFO.STATEBACK_QUARANTINE_V1"
+          "$JS.API.STREAM.CREATE.STATEBACK_QUARANTINE_V1"
+          "$JS.API.CONSUMER.INFO.STATEBACK_QUARANTINE_V1.stateback-quarantine-operator-v1"
+          "$JS.API.CONSUMER.CREATE.STATEBACK_QUARANTINE_V1.stateback-quarantine-operator-v1.stateback.quarantine.v1"
+          "$JS.API.CONSUMER.DURABLE.CREATE.STATEBACK_QUARANTINE_V1.stateback-quarantine-operator-v1"
+        ]
+        subscribe: ["_INBOX.>"]
+      }
+    }
+    {
+      user: "stateback_quarantine"
+      password: "replace-with-a-distinct-random-quarantine-password"
+      permissions: {
+        publish: [
+          "stateback.work.v1"
+          "$JS.API.STREAM.INFO.STATEBACK_QUARANTINE_V1"
+          "$JS.API.CONSUMER.INFO.STATEBACK_QUARANTINE_V1.stateback-quarantine-operator-v1"
+          "$JS.API.CONSUMER.MSG.NEXT.STATEBACK_QUARANTINE_V1.stateback-quarantine-operator-v1"
+          "$JS.ACK.STATEBACK_QUARANTINE_V1.stateback-quarantine-operator-v1.>"
+        ]
+        subscribe: ["_INBOX.>"]
+      }
+    }
+  ]
+}

@@ -1,0 +1,1 @@
+postgresql+psycopg://stateback_owner:replace-with-a-random-database-owner-password@postgres:5432/stateback

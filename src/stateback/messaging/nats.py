@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 from nats.aio.msg import Msg
 from nats.js.client import JetStreamContext
 
@@ -37,7 +39,8 @@ class JetStreamConsumer:
             delivery_count = message.metadata.num_delivered
         except ValueError:
             delivery_count = 1
-        decision = self._handler.handle(
+        decision = await asyncio.to_thread(
+            self._handler.handle,
             message.data,
             delivery_count=delivery_count,
         )

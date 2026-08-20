@@ -186,6 +186,51 @@ def test_submit_uses_authenticated_identity_and_application_service(
     assert stub.submits[0][1] == "request-1"
 
 
+def test_submit_rejects_oversize_or_deep_untrusted_input(
+    client: TestClient, stub: StubService
+) -> None:
+    oversized = _submit_body()
+    oversized["arguments"] = {"value": "x" * 65_537}
+    response = client.post(
+        "/v1/operations",
+        headers={
+            "Authorization": "Bearer caller-token",
+            "Idempotency-Key": "request-oversized",
+        },
+        json=oversized,
+    )
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "input_too_large"
+
+    nested: object = "value"
+    for _ in range(34):
+        nested = [nested]
+    too_deep = _submit_body()
+    too_deep["arguments"] = nested
+    response = client.post(
+        "/v1/operations",
+        headers={
+            "Authorization": "Bearer caller-token",
+            "Idempotency-Key": "request-deep",
+        },
+        json=too_deep,
+    )
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "input_too_large"
+    assert stub.submits == []
+
+
+def test_oversize_authorization_header_fails_closed(
+    client: TestClient, stub: StubService
+) -> None:
+    response = client.get(
+        "/v1/operations/00000000-0000-4000-8000-000000000001",
+        headers={"Authorization": f"Bearer {'x' * 4096}"},
+    )
+    assert response.status_code == 401
+    assert stub.reads == 0
+
+
 def test_read_route_is_read_only(client: TestClient, stub: StubService) -> None:
     response = client.get(
         "/v1/operations/00000000-0000-4000-8000-000000000001",

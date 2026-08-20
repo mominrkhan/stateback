@@ -19,12 +19,12 @@ from stateback.application.auth import (
     Authenticator,
     AuthorizationError,
 )
+from stateback.application.input_validation import bounded_json_from_plain
 from stateback.application.models import OperationSearch, SubmitOperationRequest
 from stateback.application.service import ApplicationService, ApplicationServiceError
 from stateback.domain.enums import ApprovalState
 from stateback.domain.exceptions import ContractValidationError
 from stateback.domain.ids import OpaqueId
-from stateback.domain.jsonutil import json_from_plain
 from stateback.domain.refs import EffectRef
 from stateback.persistence.exceptions import PersistenceError
 
@@ -32,6 +32,8 @@ from stateback.persistence.exceptions import PersistenceError
 def _credential(authorization: str | None) -> str | None:
     if authorization is None:
         return None
+    if len(authorization) > 4096:
+        raise AuthenticationError("invalid_authorization_header")
     scheme, separator, value = authorization.partition(" ")
     if separator != " " or scheme.lower() != "bearer" or not value:
         raise AuthenticationError("invalid_authorization_header")
@@ -144,7 +146,7 @@ def create_app(*, service: ApplicationService, authenticator: Authenticator) -> 
                     action=body.effect.action,
                     version=body.effect.version,
                 ),
-                arguments=json_from_plain(body.arguments),
+                arguments=bounded_json_from_plain(body.arguments),
                 metadata=tuple(sorted(body.metadata.items())),
                 deployment_environment=body.deployment_environment,
             ),

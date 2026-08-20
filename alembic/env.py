@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-import os
 from logging.config import fileConfig
 
 from alembic import context
 from sqlalchemy import engine_from_config, pool
 
+from stateback.persistence.engine import require_database_url
 from stateback.persistence.models import Base
 
 config = context.config
@@ -13,9 +13,7 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-database_url = os.environ.get("STATEBACK_DATABASE_URL")
-if not database_url:
-    raise RuntimeError("STATEBACK_DATABASE_URL is required")
+database_url = require_database_url()
 config.set_main_option("sqlalchemy.url", database_url)
 
 target_metadata = Base.metadata

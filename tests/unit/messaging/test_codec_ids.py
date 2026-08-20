@@ -10,6 +10,8 @@ from stateback.domain.exceptions import ContractValidationError
 from stateback.domain.ids import OpaqueId
 from stateback.domain.messaging import WorkMessageV1
 from stateback.messaging.codec import (
+    MAX_WORK_MESSAGE_BYTES,
+    decode_quarantine_diagnostic,
     decode_work_message,
     encode_quarantine_diagnostic,
     encode_work_message,
@@ -51,6 +53,11 @@ def test_decode_rejects_malformed_or_unsupported_message(payload: bytes) -> None
         decode_work_message(payload)
 
 
+def test_oversize_work_message_is_rejected_without_parsing() -> None:
+    with pytest.raises(ContractValidationError, match="supported size"):
+        decode_work_message(b"{" + b" " * MAX_WORK_MESSAGE_BYTES + b"}")
+
+
 def test_redelivery_reuses_ids_and_new_outbox_changes_them() -> None:
     first = DeterministicWorkIds(message()).execute()
     duplicate = DeterministicWorkIds(message()).execute()
@@ -71,12 +78,14 @@ def test_redelivery_reuses_ids_and_new_outbox_changes_them() -> None:
 
 def test_valid_quarantine_diagnostic_is_identified_and_replayable() -> None:
     payload = encode_work_message(message())
-    diagnostic = json.loads(
-        encode_quarantine_diagnostic(payload, delivery_count=4).decode("utf-8")
-    )
+    encoded = encode_quarantine_diagnostic(payload, delivery_count=4)
+    diagnostic = json.loads(encoded.decode("utf-8"))
     assert diagnostic["diagnostic_type"] == "DELIVERY_EXHAUSTED"
     assert diagnostic["operation_id"] == message().operation_id.value
     assert base64.b64decode(diagnostic["replay_payload_base64"]) == payload
+    decoded = decode_quarantine_diagnostic(encoded)
+    assert decoded.message == message()
+    assert decoded.replay_payload == payload
 
 
 def test_poison_quarantine_diagnostic_does_not_copy_untrusted_payload() -> None:
@@ -87,3 +96,17 @@ def test_poison_quarantine_diagnostic_does_not_copy_untrusted_payload() -> None:
     assert diagnostic["replay_payload_base64"] is None
     assert diagnostic["payload_size_bytes"] == len(payload)
     assert b"must_not_escape" not in encoded
+    assert decode_quarantine_diagnostic(encoded).replay_payload is None
+
+
+def test_quarantine_decoder_rejects_tampered_replay_identity() -> None:
+    diagnostic = json.loads(
+        encode_quarantine_diagnostic(
+            encode_work_message(message()), delivery_count=4
+        ).decode("ascii")
+    )
+    diagnostic["operation_id"] = oid(99).value
+    with pytest.raises(ContractValidationError, match="inconsistent"):
+        decode_quarantine_diagnostic(
+            json.dumps(diagnostic, sort_keys=True, separators=(",", ":")).encode()
+        )

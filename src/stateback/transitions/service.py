@@ -98,6 +98,103 @@ def _audit_data(**pairs: object) -> JsonValue:
 
 
 class TransitionService:
+    def escalate_messaging_recovery(
+        self,
+        uow: UnitOfWork,
+        *,
+        operation_id: OpaqueId,
+        expected_version: int,
+        occurred_at: UtcTimestamp,
+        actor: PrincipalRef,
+        correlation_id: str | None,
+        reason_code: str,
+        transition_audit_event_id: OpaqueId,
+        command: WorkCommand,
+        max_recoveries: int,
+    ) -> TransitionResult:
+        """Atomically expose exhausted transport recovery to operators."""
+
+        loaded = uow.operations.get_for_update(operation_id)
+        if loaded is None:
+            raise NotFoundError("operation not found")
+        target = OperationState.MANUAL_INTERVENTION
+        if loaded.version != expected_version:
+            raise ConcurrencyConflictError("stale operation version")
+        recovery_kind = {
+            OperationState.READY: TransitionKind.READY_MESSAGING_RECOVERY_EXHAUSTED,
+            OperationState.EXECUTING: (
+                TransitionKind.EXECUTION_MESSAGING_RECOVERY_EXHAUSTED
+            ),
+            OperationState.VERIFYING: TransitionKind.VERIFICATION_ESCALATE,
+            OperationState.UNKNOWN: TransitionKind.UNKNOWN_ESCALATE,
+            OperationState.COMPENSATING: TransitionKind.COMPENSATION_ESCALATE,
+            OperationState.COMPENSATION_UNKNOWN: (
+                TransitionKind.COMPENSATION_UNKNOWN_ESCALATE
+            ),
+            OperationState.COMPENSATION_FAILED: (
+                TransitionKind.COMPENSATION_FAILED_ESCALATE
+            ),
+        }.get(loaded.state)
+        if recovery_kind is None:
+            return self._rejected(
+                TransitionKind.READY_MESSAGING_RECOVERY_EXHAUSTED,
+                "unsupported_messaging_recovery_state",
+                loaded,
+                loaded.state,
+                target,
+                loaded.version,
+            )
+        listed = evaluate_operation_transition(loaded.state, target)
+        if listed.verdict is not TransitionVerdict.LEGAL:
+            return self._rejected(
+                recovery_kind,
+                "unlisted_operation_transition",
+                loaded,
+                loaded.state,
+                target,
+                loaded.version,
+            )
+        new_operation = replace_operation(
+            loaded,
+            state=target,
+            version=next_version(loaded.version),
+            updated_at=occurred_at,
+        )
+        uow.operations.update_cas(expected_version, new_operation)
+        event = self._event(
+            audit_event_id=transition_audit_event_id,
+            operation_id=loaded.operation_id,
+            sequence=uow.audit_events.next_sequence(loaded.operation_id),
+            event_type=AuditEventType.OPERATION_TRANSITIONED,
+            from_state=loaded.state,
+            to_state=target,
+            operation_version=new_operation.version,
+            actor=actor,
+            reason_code=reason_code,
+            data=json_from_plain(
+                {
+                    "command": command.value,
+                    "max_recoveries": max_recoveries,
+                    "operator_intervention_required": True,
+                }
+            ),
+            correlation_id=correlation_id,
+            created_at=occurred_at,
+        )
+        uow.audit_events.append(event)
+        return TransitionResult(
+            outcome=TransitionOutcome.APPLIED,
+            reason_code="applied",
+            kind=recovery_kind,
+            operation=new_operation,
+            compensation=None,
+            audit_events=(event,),
+            outbox_event=None,
+            from_state=loaded.state,
+            to_state=target,
+            operation_version=new_operation.version,
+        )
+
     def apply(self, uow: UnitOfWork, command: TransitionCommand) -> TransitionResult:
         expected = COMMAND_TYPE_TO_KIND.get(type(command))
         if expected is None or command.kind is not expected:

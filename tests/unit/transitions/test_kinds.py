@@ -16,10 +16,10 @@ def test_kind_to_edge_matches_legal_operation_transitions() -> None:
     assert frozenset(KIND_TO_EDGE.values()) == LEGAL_OPERATION_TRANSITIONS
 
 
-def test_kind_count_is_40() -> None:
-    assert len(KIND_TO_EDGE) == 40
-    assert len(LEGAL_OPERATION_TRANSITIONS) == 40
-    assert len(TransitionKind) == 40
+def test_kind_count_is_42() -> None:
+    assert len(KIND_TO_EDGE) == 42
+    assert len(LEGAL_OPERATION_TRANSITIONS) == 42
+    assert len(TransitionKind) == 42
 
 
 def test_every_legal_pair_has_exactly_one_kind() -> None:

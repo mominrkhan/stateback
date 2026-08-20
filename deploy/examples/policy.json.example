@@ -1,0 +1,21 @@
+{
+  "revision": "example-production-policy-v1",
+  "rules": [
+    {
+      "rule_id": "github-create-issue-requires-approval",
+      "verdict": "REQUIRE_APPROVAL",
+      "providers": ["github"],
+      "actions": ["create_issue"],
+      "versions": ["v1"],
+      "deployment_environments": ["production"],
+      "obligations": {
+        "require_verification": false,
+        "max_automatic_execution_attempts": 1,
+        "max_automatic_recovery_attempts": 3,
+        "automatic_compensation_allowed": false,
+        "operator_reason_required": true,
+        "approval_expires_at": null
+      }
+    }
+  ]
+}

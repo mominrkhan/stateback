@@ -1,0 +1,18 @@
+{
+  "identities": [
+    {
+      "token": "replace-with-a-random-caller-token",
+      "principal_type": "AGENT",
+      "principal_id": "example-agent",
+      "display_name": "Example agent",
+      "roles": ["CALLER", "READER"]
+    },
+    {
+      "token": "replace-with-a-different-random-operator-token",
+      "principal_type": "OPERATOR",
+      "principal_id": "example-operator",
+      "display_name": "Example operator",
+      "roles": ["OPERATOR", "APPROVER"]
+    }
+  ]
+}

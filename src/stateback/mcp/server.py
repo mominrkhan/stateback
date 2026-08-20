@@ -8,10 +8,10 @@ from mcp.server import MCPServer
 from pydantic import BaseModel, ConfigDict, Field
 
 from stateback.application.auth import AuthenticatedIdentity
+from stateback.application.input_validation import bounded_json_from_plain
 from stateback.application.models import SubmitOperationRequest
 from stateback.application.service import ApplicationService
 from stateback.domain.ids import OpaqueId
-from stateback.domain.jsonutil import json_from_plain
 from stateback.domain.refs import EffectRef
 
 
@@ -49,7 +49,7 @@ class StatebackMcpTools:
                     action=parsed.action,
                     version=parsed.effect_version,
                 ),
-                arguments=json_from_plain(parsed.arguments),
+                arguments=bounded_json_from_plain(parsed.arguments),
                 metadata=tuple(sorted(parsed.metadata.items())),
                 deployment_environment=parsed.deployment_environment,
             ),

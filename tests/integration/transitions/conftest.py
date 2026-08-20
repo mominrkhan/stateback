@@ -61,6 +61,7 @@ from stateback.transitions.commands import (
     CompensationUnknownRetry,
     CreateOperation,
     ExecutionApplied,
+    ExecutionMessagingRecoveryExhausted,
     ExecutionNotAppliedFail,
     ExecutionNotAppliedRetry,
     ExecutionRequireVerification,
@@ -72,6 +73,7 @@ from stateback.transitions.commands import (
     PolicyAllow,
     PolicyDeny,
     PolicyRequireApproval,
+    ReadyMessagingRecoveryExhausted,
     SucceededStartCompensation,
     TransitionCommand,
     UnknownEscalate,
@@ -871,6 +873,10 @@ def command_for(scenario: Scenario, kind: TransitionKind) -> TransitionCommand:
         )
     if kind is TransitionKind.CANCEL_READY:
         return CancelReady(**base(kind, actor=OPERATOR))  # type: ignore[arg-type]
+    if kind is TransitionKind.READY_MESSAGING_RECOVERY_EXHAUSTED:
+        return ReadyMessagingRecoveryExhausted(
+            **base(kind, actor=None),  # type: ignore[arg-type]
+        )
     if kind is TransitionKind.EXECUTION_APPLIED:
         assert scenario.started_attempt is not None
         return ExecutionApplied(
@@ -924,6 +930,10 @@ def command_for(scenario: Scenario, kind: TransitionKind) -> TransitionCommand:
             completed_attempt=None,
             evidence_audit_event_id=ids.next(),
             outbox_event_id=ids.next(),
+        )
+    if kind is TransitionKind.EXECUTION_MESSAGING_RECOVERY_EXHAUSTED:
+        return ExecutionMessagingRecoveryExhausted(
+            **base(kind, actor=None),  # type: ignore[arg-type]
         )
     if kind is TransitionKind.VERIFICATION_APPLIED:
         assert scenario.verification_id is not None
