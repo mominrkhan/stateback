@@ -1,0 +1,320 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    env:
+      STATEBACK_DATABASE_URL: postgresql+psycopg://stateback:stateback_ci_only@127.0.0.1:5432/stateback
+      STATEBACK_NATS_URL: nats://127.0.0.1:4222
+      STATEBACK_POSTGRES_HOST: 127.0.0.1
+      STATEBACK_POSTGRES_PORT: "5432"
+      STATEBACK_POSTGRES_DB: stateback
+      STATEBACK_POSTGRES_USER: stateback
+      STATEBACK_POSTGRES_PASSWORD: stateback_ci_only
+      STATEBACK_NATS_MONITOR_URL: http://127.0.0.1:8222
+      STATEBACK_RUN_INTEGRATION: "1"
+      STATEBACK_BENCH_POSTGRES_VERSION: "16.15"
+      STATEBACK_BENCH_NATS_VERSION: "2.12.6"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          version: "0.12.5"
+          python-version: "3.12"
+          enable-cache: true
+      - name: Validate immutable release version
+        run: |
+          test "${GITHUB_REF_NAME}" = "v$(uv run python -c 'import stateback; print(stateback.__version__)')"
+          test "${GITHUB_REF_NAME}" = "v$(node -p "require('./frontend/package.json').version")"
+      - name: Verify source
+        run: |
+          uv sync --frozen
+          uv run ruff check .
+          uv run ruff format --check .
+          uv run mypy src tests
+          uv run pytest -m unit
+          docker compose up -d --wait
+          uv run pytest -m integration
+          uv run alembic upgrade head
+      - name: Verify benchmarks and frontend
+        run: |
+          uv run python -m benchmarks.run correctness --output /tmp/release-correctness.json
+          npm --prefix frontend ci
+          npm --prefix frontend test -- --run
+          npm --prefix frontend run build
+          (cd frontend/dist && find . -type f -print0 | sort -z | xargs -0 sha256sum) > /tmp/frontend-a.sha256
+          npm --prefix frontend ci
+          npm --prefix frontend run build
+          (cd frontend/dist && find . -type f -print0 | sort -z | xargs -0 sha256sum) > /tmp/frontend-b.sha256
+          diff --unified /tmp/frontend-a.sha256 /tmp/frontend-b.sha256
+      - name: Verify reproducible Python archives
+        run: |
+          export SOURCE_DATE_EPOCH="$(git show -s --format=%ct HEAD)"
+          uv build --out-dir /tmp/package-a
+          uv build --out-dir /tmp/package-b
+          (cd /tmp/package-a && sha256sum *) > /tmp/package-a.sha256
+          (cd /tmp/package-b && sha256sum *) > /tmp/package-b.sha256
+          diff --unified /tmp/package-a.sha256 /tmp/package-b.sha256
+      - name: Security and documentation gates
+        run: |
+          uv export --frozen --no-dev --no-emit-project --format requirements.txt --output-file /tmp/stateback-requirements.txt
+          uv run pip-audit --strict --requirement /tmp/stateback-requirements.txt
+          npm --prefix frontend audit --package-lock-only --audit-level=high
+          export SOURCE_DATE_EPOCH="$(git show -s --format=%ct HEAD)"
+          uv run mkdocs build --strict --site-dir /tmp/docs-a
+          uv run mkdocs build --strict --site-dir /tmp/docs-b
+          (cd /tmp/docs-a && find . -type f -print0 | sort -z | xargs -0 sha256sum) > /tmp/docs-a.sha256
+          (cd /tmp/docs-b && find . -type f -print0 | sort -z | xargs -0 sha256sum) > /tmp/docs-b.sha256
+          diff --unified /tmp/docs-a.sha256 /tmp/docs-b.sha256
+          uv run python -m stateback.deployment.release_evidence --revision "$GITHUB_SHA"
+      - name: Scan source, configuration, and secrets
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln,secret,misconfig
+          severity: HIGH,CRITICAL
+          exit-code: "1"
+      - name: Build release containers for smoke validation
+        run: |
+          source_date_epoch="$(git show -s --format=%ct HEAD)"
+          docker buildx build --no-cache --platform linux/amd64 --provenance=false --build-arg SOURCE_DATE_EPOCH="$source_date_epoch" --build-arg STATEBACK_SOURCE_REVISION="$GITHUB_SHA" --output type=oci,dest=/tmp/runtime-a.tar,rewrite-timestamp=true -f deploy/Dockerfile .
+          docker buildx build --no-cache --platform linux/amd64 --provenance=false --build-arg SOURCE_DATE_EPOCH="$source_date_epoch" --build-arg STATEBACK_SOURCE_REVISION="$GITHUB_SHA" --output type=oci,dest=/tmp/runtime-b.tar,rewrite-timestamp=true -f deploy/Dockerfile .
+          runtime_a_digest="$(python3 -c 'import json,sys,tarfile; archive=tarfile.open(sys.argv[1]); print(json.load(archive.extractfile("index.json"))["manifests"][0]["digest"])' /tmp/runtime-a.tar)"
+          runtime_b_digest="$(python3 -c 'import json,sys,tarfile; archive=tarfile.open(sys.argv[1]); print(json.load(archive.extractfile("index.json"))["manifests"][0]["digest"])' /tmp/runtime-b.tar)"
+          test "$runtime_a_digest" = "$runtime_b_digest"
+          docker load --input /tmp/runtime-a.tar
+          docker tag "$runtime_a_digest" ghcr.io/mominrkhan/stateback:0.1.0
+
+          docker buildx build --no-cache --platform linux/amd64 --provenance=false --build-arg SOURCE_DATE_EPOCH="$source_date_epoch" --build-arg STATEBACK_SOURCE_REVISION="$GITHUB_SHA" --output type=oci,dest=/tmp/frontend-a.tar,rewrite-timestamp=true -f deploy/frontend.Dockerfile .
+          docker buildx build --no-cache --platform linux/amd64 --provenance=false --build-arg SOURCE_DATE_EPOCH="$source_date_epoch" --build-arg STATEBACK_SOURCE_REVISION="$GITHUB_SHA" --output type=oci,dest=/tmp/frontend-b.tar,rewrite-timestamp=true -f deploy/frontend.Dockerfile .
+          frontend_a_digest="$(python3 -c 'import json,sys,tarfile; archive=tarfile.open(sys.argv[1]); print(json.load(archive.extractfile("index.json"))["manifests"][0]["digest"])' /tmp/frontend-a.tar)"
+          frontend_b_digest="$(python3 -c 'import json,sys,tarfile; archive=tarfile.open(sys.argv[1]); print(json.load(archive.extractfile("index.json"))["manifests"][0]["digest"])' /tmp/frontend-b.tar)"
+          test "$frontend_a_digest" = "$frontend_b_digest"
+          docker load --input /tmp/frontend-a.tar
+          docker tag "$frontend_a_digest" ghcr.io/mominrkhan/stateback-frontend:0.1.0
+      - name: Report all runtime image findings
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ghcr.io/mominrkhan/stateback:0.1.0
+          scanners: vuln,secret,misconfig
+          severity: HIGH,CRITICAL
+          exit-code: "0"
+      - name: Block fix-available runtime image findings
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ghcr.io/mominrkhan/stateback:0.1.0
+          scanners: vuln,secret,misconfig
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+      - name: Report all frontend image findings
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ghcr.io/mominrkhan/stateback-frontend:0.1.0
+          scanners: vuln,secret,misconfig
+          severity: HIGH,CRITICAL
+          exit-code: "0"
+      - name: Block fix-available frontend image findings
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ghcr.io/mominrkhan/stateback-frontend:0.1.0
+          scanners: vuln,secret,misconfig
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+      - name: Verify production Compose
+        run: deploy/verify-compose.sh
+      - name: Upload correctness provenance
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-correctness
+          path: /tmp/release-correctness.json
+          if-no-files-found: error
+
+  package:
+    needs: validate
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          version: "0.12.5"
+          python-version: "3.12"
+      - name: Build traceable Python archives
+        run: SOURCE_DATE_EPOCH="$(git show -s --format=%ct HEAD)" uv build
+      - uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3.0.0
+        with:
+          subject-path: dist/*
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: python-distributions
+          path: dist/*
+          if-no-files-found: error
+
+  publish-pypi:
+    needs: package
+    runs-on: ubuntu-24.04
+    environment: release
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: python-distributions
+          path: dist
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          version: "0.12.5"
+      - run: uv publish --trusted-publishing always dist/*
+
+  images:
+    needs: validate
+    runs-on: ubuntu-24.04
+    environment: release
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Build exact release images
+        run: |
+          source_date_epoch="$(git show -s --format=%ct HEAD)"
+          docker buildx build --no-cache --platform linux/amd64 --provenance=false --build-arg SOURCE_DATE_EPOCH="$source_date_epoch" --build-arg STATEBACK_SOURCE_REVISION="$GITHUB_SHA" --output type=oci,dest=/tmp/runtime.tar,rewrite-timestamp=true -f deploy/Dockerfile .
+          runtime_digest="$(python3 -c 'import json,sys,tarfile; archive=tarfile.open(sys.argv[1]); print(json.load(archive.extractfile("index.json"))["manifests"][0]["digest"])' /tmp/runtime.tar)"
+          docker load --input /tmp/runtime.tar
+          docker tag "$runtime_digest" "ghcr.io/mominrkhan/stateback:${GITHUB_REF_NAME}"
+          docker tag "$runtime_digest" ghcr.io/mominrkhan/stateback:0.1.0
+
+          docker buildx build --no-cache --platform linux/amd64 --provenance=false --build-arg SOURCE_DATE_EPOCH="$source_date_epoch" --build-arg STATEBACK_SOURCE_REVISION="$GITHUB_SHA" --output type=oci,dest=/tmp/frontend.tar,rewrite-timestamp=true -f deploy/frontend.Dockerfile .
+          frontend_digest="$(python3 -c 'import json,sys,tarfile; archive=tarfile.open(sys.argv[1]); print(json.load(archive.extractfile("index.json"))["manifests"][0]["digest"])' /tmp/frontend.tar)"
+          docker load --input /tmp/frontend.tar
+          docker tag "$frontend_digest" "ghcr.io/mominrkhan/stateback-frontend:${GITHUB_REF_NAME}"
+          docker tag "$frontend_digest" ghcr.io/mominrkhan/stateback-frontend:0.1.0
+      - name: Report all runtime image findings
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ghcr.io/mominrkhan/stateback:${{ github.ref_name }}
+          scanners: vuln,secret,misconfig
+          severity: HIGH,CRITICAL
+          exit-code: "0"
+      - name: Block fix-available runtime image findings
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ghcr.io/mominrkhan/stateback:${{ github.ref_name }}
+          scanners: vuln,secret,misconfig
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+      - name: Generate runtime SBOM
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ghcr.io/mominrkhan/stateback:${{ github.ref_name }}
+          format: cyclonedx
+          output: runtime.cdx.json
+      - name: Report all frontend image findings
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ghcr.io/mominrkhan/stateback-frontend:${{ github.ref_name }}
+          scanners: vuln,secret,misconfig
+          severity: HIGH,CRITICAL
+          exit-code: "0"
+      - name: Block fix-available frontend image findings
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ghcr.io/mominrkhan/stateback-frontend:${{ github.ref_name }}
+          scanners: vuln,secret,misconfig
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+      - name: Generate frontend SBOM
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ghcr.io/mominrkhan/stateback-frontend:${{ github.ref_name }}
+          format: cyclonedx
+          output: frontend.cdx.json
+      - name: Authenticate to GHCR
+        run: echo "${{ github.token }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+      - name: Publish the scanned images
+        id: publish
+        run: |
+          set -euo pipefail
+          runtime_output="$(docker push "ghcr.io/mominrkhan/stateback:${GITHUB_REF_NAME}")"
+          printf '%s\n' "$runtime_output"
+          runtime_digest="$(printf '%s\n' "$runtime_output" | sed -n 's/^.*digest: \(sha256:[0-9a-f]\{64\}\).*/\1/p' | tail -1)"
+          test -n "$runtime_digest"
+          docker push ghcr.io/mominrkhan/stateback:0.1.0
+
+          frontend_output="$(docker push "ghcr.io/mominrkhan/stateback-frontend:${GITHUB_REF_NAME}")"
+          printf '%s\n' "$frontend_output"
+          frontend_digest="$(printf '%s\n' "$frontend_output" | sed -n 's/^.*digest: \(sha256:[0-9a-f]\{64\}\).*/\1/p' | tail -1)"
+          test -n "$frontend_digest"
+          docker push ghcr.io/mominrkhan/stateback-frontend:0.1.0
+
+          printf 'runtime_digest=%s\n' "$runtime_digest" >> "$GITHUB_OUTPUT"
+          printf 'frontend_digest=%s\n' "$frontend_digest" >> "$GITHUB_OUTPUT"
+      - name: Attest runtime provenance
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3.0.0
+        with:
+          subject-name: ghcr.io/mominrkhan/stateback
+          subject-digest: ${{ steps.publish.outputs.runtime_digest }}
+          push-to-registry: true
+      - name: Attest runtime SBOM
+        uses: actions/attest-sbom@4651f806c01d8637787e274ac3bdf724ef169f34 # v3.0.0
+        with:
+          subject-name: ghcr.io/mominrkhan/stateback
+          subject-digest: ${{ steps.publish.outputs.runtime_digest }}
+          sbom-path: runtime.cdx.json
+          push-to-registry: true
+      - name: Attest frontend provenance
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3.0.0
+        with:
+          subject-name: ghcr.io/mominrkhan/stateback-frontend
+          subject-digest: ${{ steps.publish.outputs.frontend_digest }}
+          push-to-registry: true
+      - name: Attest frontend SBOM
+        uses: actions/attest-sbom@4651f806c01d8637787e274ac3bdf724ef169f34 # v3.0.0
+        with:
+          subject-name: ghcr.io/mominrkhan/stateback-frontend
+          subject-digest: ${{ steps.publish.outputs.frontend_digest }}
+          sbom-path: frontend.cdx.json
+          push-to-registry: true
+
+  pages:
+    needs: validate
+    runs-on: ubuntu-24.04
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          version: "0.12.5"
+          python-version: "3.12"
+      - run: uv sync --frozen && uv run mkdocs build --strict
+      - uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3.0.1
+        with:
+          path: site
+      - name: Deploy Pages
+        id: deployment
+        uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4.0.5
