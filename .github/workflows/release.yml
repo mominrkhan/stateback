@@ -32,8 +32,13 @@ jobs:
           enable-cache: true
       - name: Validate immutable release version
         run: |
-          test "${GITHUB_REF_NAME}" = "v$(uv run python -c 'import stateback; print(stateback.__version__)')"
-          test "${GITHUB_REF_NAME}" = "v$(node -p "require('./frontend/package.json').version")"
+          package_version="$(uv run python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')"
+          runtime_version="$(uv run python -c 'import stateback; print(stateback.__version__)')"
+          frontend_version="$(node -p "require('./frontend/package.json').version")"
+          test "$package_version" = "$runtime_version"
+          test "$runtime_version" = "$frontend_version"
+          test "${GITHUB_REF_NAME}" = "v$runtime_version"
+          printf 'STATEBACK_VERSION=%s\n' "$runtime_version" >> "$GITHUB_ENV"
       - name: Verify source
         run: |
           uv sync --frozen
@@ -86,32 +91,32 @@ jobs:
       - name: Build release containers for smoke validation
         run: |
           source_date_epoch="$(git show -s --format=%ct HEAD)"
-          docker buildx build --no-cache --platform linux/amd64 --provenance=false --build-arg SOURCE_DATE_EPOCH="$source_date_epoch" --build-arg STATEBACK_SOURCE_REVISION="$GITHUB_SHA" --output type=oci,dest=/tmp/runtime-a.tar,rewrite-timestamp=true -f deploy/Dockerfile .
-          docker buildx build --no-cache --platform linux/amd64 --provenance=false --build-arg SOURCE_DATE_EPOCH="$source_date_epoch" --build-arg STATEBACK_SOURCE_REVISION="$GITHUB_SHA" --output type=oci,dest=/tmp/runtime-b.tar,rewrite-timestamp=true -f deploy/Dockerfile .
+          docker buildx build --no-cache --platform linux/amd64 --provenance=false --build-arg SOURCE_DATE_EPOCH="$source_date_epoch" --build-arg STATEBACK_VERSION="$STATEBACK_VERSION" --build-arg STATEBACK_SOURCE_REVISION="$GITHUB_SHA" --output type=oci,dest=/tmp/runtime-a.tar,rewrite-timestamp=true -f deploy/Dockerfile .
+          docker buildx build --no-cache --platform linux/amd64 --provenance=false --build-arg SOURCE_DATE_EPOCH="$source_date_epoch" --build-arg STATEBACK_VERSION="$STATEBACK_VERSION" --build-arg STATEBACK_SOURCE_REVISION="$GITHUB_SHA" --output type=oci,dest=/tmp/runtime-b.tar,rewrite-timestamp=true -f deploy/Dockerfile .
           runtime_a_digest="$(python3 -c 'import json,sys,tarfile; archive=tarfile.open(sys.argv[1]); print(json.load(archive.extractfile("index.json"))["manifests"][0]["digest"])' /tmp/runtime-a.tar)"
           runtime_b_digest="$(python3 -c 'import json,sys,tarfile; archive=tarfile.open(sys.argv[1]); print(json.load(archive.extractfile("index.json"))["manifests"][0]["digest"])' /tmp/runtime-b.tar)"
           test "$runtime_a_digest" = "$runtime_b_digest"
           docker load --input /tmp/runtime-a.tar
-          docker tag "$runtime_a_digest" ghcr.io/mominrkhan/stateback:0.1.0
+          docker tag "$runtime_a_digest" "ghcr.io/mominrkhan/stateback:$STATEBACK_VERSION"
 
-          docker buildx build --no-cache --platform linux/amd64 --provenance=false --build-arg SOURCE_DATE_EPOCH="$source_date_epoch" --build-arg STATEBACK_SOURCE_REVISION="$GITHUB_SHA" --output type=oci,dest=/tmp/frontend-a.tar,rewrite-timestamp=true -f deploy/frontend.Dockerfile .
-          docker buildx build --no-cache --platform linux/amd64 --provenance=false --build-arg SOURCE_DATE_EPOCH="$source_date_epoch" --build-arg STATEBACK_SOURCE_REVISION="$GITHUB_SHA" --output type=oci,dest=/tmp/frontend-b.tar,rewrite-timestamp=true -f deploy/frontend.Dockerfile .
+          docker buildx build --no-cache --platform linux/amd64 --provenance=false --build-arg SOURCE_DATE_EPOCH="$source_date_epoch" --build-arg STATEBACK_VERSION="$STATEBACK_VERSION" --build-arg STATEBACK_SOURCE_REVISION="$GITHUB_SHA" --output type=oci,dest=/tmp/frontend-a.tar,rewrite-timestamp=true -f deploy/frontend.Dockerfile .
+          docker buildx build --no-cache --platform linux/amd64 --provenance=false --build-arg SOURCE_DATE_EPOCH="$source_date_epoch" --build-arg STATEBACK_VERSION="$STATEBACK_VERSION" --build-arg STATEBACK_SOURCE_REVISION="$GITHUB_SHA" --output type=oci,dest=/tmp/frontend-b.tar,rewrite-timestamp=true -f deploy/frontend.Dockerfile .
           frontend_a_digest="$(python3 -c 'import json,sys,tarfile; archive=tarfile.open(sys.argv[1]); print(json.load(archive.extractfile("index.json"))["manifests"][0]["digest"])' /tmp/frontend-a.tar)"
           frontend_b_digest="$(python3 -c 'import json,sys,tarfile; archive=tarfile.open(sys.argv[1]); print(json.load(archive.extractfile("index.json"))["manifests"][0]["digest"])' /tmp/frontend-b.tar)"
           test "$frontend_a_digest" = "$frontend_b_digest"
           docker load --input /tmp/frontend-a.tar
-          docker tag "$frontend_a_digest" ghcr.io/mominrkhan/stateback-frontend:0.1.0
+          docker tag "$frontend_a_digest" "ghcr.io/mominrkhan/stateback-frontend:$STATEBACK_VERSION"
       - name: Report all runtime image findings
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
-          image-ref: ghcr.io/mominrkhan/stateback:0.1.0
+          image-ref: ghcr.io/mominrkhan/stateback:${{ env.STATEBACK_VERSION }}
           scanners: vuln,secret,misconfig
           severity: HIGH,CRITICAL
           exit-code: "0"
       - name: Block fix-available runtime image findings
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
-          image-ref: ghcr.io/mominrkhan/stateback:0.1.0
+          image-ref: ghcr.io/mominrkhan/stateback:${{ env.STATEBACK_VERSION }}
           scanners: vuln,secret,misconfig
           severity: HIGH,CRITICAL
           ignore-unfixed: true
@@ -119,14 +124,14 @@ jobs:
       - name: Report all frontend image findings
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
-          image-ref: ghcr.io/mominrkhan/stateback-frontend:0.1.0
+          image-ref: ghcr.io/mominrkhan/stateback-frontend:${{ env.STATEBACK_VERSION }}
           scanners: vuln,secret,misconfig
           severity: HIGH,CRITICAL
           exit-code: "0"
       - name: Block fix-available frontend image findings
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
-          image-ref: ghcr.io/mominrkhan/stateback-frontend:0.1.0
+          image-ref: ghcr.io/mominrkhan/stateback-frontend:${{ env.STATEBACK_VERSION }}
           scanners: vuln,secret,misconfig
           severity: HIGH,CRITICAL
           ignore-unfixed: true
@@ -192,20 +197,26 @@ jobs:
       attestations: write
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Derive release image version
+        run: |
+          runtime_version="$(python3 -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')"
+          frontend_version="$(node -p "require('./frontend/package.json').version")"
+          test "$runtime_version" = "$frontend_version"
+          printf 'STATEBACK_VERSION=%s\n' "$runtime_version" >> "$GITHUB_ENV"
       - name: Build exact release images
         run: |
           source_date_epoch="$(git show -s --format=%ct HEAD)"
-          docker buildx build --no-cache --platform linux/amd64 --provenance=false --build-arg SOURCE_DATE_EPOCH="$source_date_epoch" --build-arg STATEBACK_SOURCE_REVISION="$GITHUB_SHA" --output type=oci,dest=/tmp/runtime.tar,rewrite-timestamp=true -f deploy/Dockerfile .
+          docker buildx build --no-cache --platform linux/amd64 --provenance=false --build-arg SOURCE_DATE_EPOCH="$source_date_epoch" --build-arg STATEBACK_VERSION="$STATEBACK_VERSION" --build-arg STATEBACK_SOURCE_REVISION="$GITHUB_SHA" --output type=oci,dest=/tmp/runtime.tar,rewrite-timestamp=true -f deploy/Dockerfile .
           runtime_digest="$(python3 -c 'import json,sys,tarfile; archive=tarfile.open(sys.argv[1]); print(json.load(archive.extractfile("index.json"))["manifests"][0]["digest"])' /tmp/runtime.tar)"
           docker load --input /tmp/runtime.tar
           docker tag "$runtime_digest" "ghcr.io/mominrkhan/stateback:${GITHUB_REF_NAME}"
-          docker tag "$runtime_digest" ghcr.io/mominrkhan/stateback:0.1.0
+          docker tag "$runtime_digest" "ghcr.io/mominrkhan/stateback:$STATEBACK_VERSION"
 
-          docker buildx build --no-cache --platform linux/amd64 --provenance=false --build-arg SOURCE_DATE_EPOCH="$source_date_epoch" --build-arg STATEBACK_SOURCE_REVISION="$GITHUB_SHA" --output type=oci,dest=/tmp/frontend.tar,rewrite-timestamp=true -f deploy/frontend.Dockerfile .
+          docker buildx build --no-cache --platform linux/amd64 --provenance=false --build-arg SOURCE_DATE_EPOCH="$source_date_epoch" --build-arg STATEBACK_VERSION="$STATEBACK_VERSION" --build-arg STATEBACK_SOURCE_REVISION="$GITHUB_SHA" --output type=oci,dest=/tmp/frontend.tar,rewrite-timestamp=true -f deploy/frontend.Dockerfile .
           frontend_digest="$(python3 -c 'import json,sys,tarfile; archive=tarfile.open(sys.argv[1]); print(json.load(archive.extractfile("index.json"))["manifests"][0]["digest"])' /tmp/frontend.tar)"
           docker load --input /tmp/frontend.tar
           docker tag "$frontend_digest" "ghcr.io/mominrkhan/stateback-frontend:${GITHUB_REF_NAME}"
-          docker tag "$frontend_digest" ghcr.io/mominrkhan/stateback-frontend:0.1.0
+          docker tag "$frontend_digest" "ghcr.io/mominrkhan/stateback-frontend:$STATEBACK_VERSION"
       - name: Report all runtime image findings
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
@@ -258,13 +269,13 @@ jobs:
           printf '%s\n' "$runtime_output"
           runtime_digest="$(printf '%s\n' "$runtime_output" | sed -n 's/^.*digest: \(sha256:[0-9a-f]\{64\}\).*/\1/p' | tail -1)"
           test -n "$runtime_digest"
-          docker push ghcr.io/mominrkhan/stateback:0.1.0
+          docker push "ghcr.io/mominrkhan/stateback:$STATEBACK_VERSION"
 
           frontend_output="$(docker push "ghcr.io/mominrkhan/stateback-frontend:${GITHUB_REF_NAME}")"
           printf '%s\n' "$frontend_output"
           frontend_digest="$(printf '%s\n' "$frontend_output" | sed -n 's/^.*digest: \(sha256:[0-9a-f]\{64\}\).*/\1/p' | tail -1)"
           test -n "$frontend_digest"
-          docker push ghcr.io/mominrkhan/stateback-frontend:0.1.0
+          docker push "ghcr.io/mominrkhan/stateback-frontend:$STATEBACK_VERSION"
 
           printf 'runtime_digest=%s\n' "$runtime_digest" >> "$GITHUB_OUTPUT"
           printf 'frontend_digest=%s\n' "$frontend_digest" >> "$GITHUB_OUTPUT"

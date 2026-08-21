@@ -92,6 +92,14 @@ jobs:
       - name: Audit frontend dependencies
         working-directory: frontend
         run: npm audit --package-lock-only --audit-level=high
+      - name: Derive release image version
+        run: |
+          package_version="$(uv run python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')"
+          runtime_version="$(uv run python -c 'import stateback; print(stateback.__version__)')"
+          frontend_version="$(node -p "require('./frontend/package.json').version")"
+          test "$package_version" = "$runtime_version"
+          test "$runtime_version" = "$frontend_version"
+          printf 'STATEBACK_VERSION=%s\n' "$runtime_version" >> "$GITHUB_ENV"
       - name: Scan source, configuration, and secrets
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
@@ -102,31 +110,31 @@ jobs:
           exit-code: "1"
       - name: Validate production Compose
         env:
-          STATEBACK_DATABASE_OWNER_PASSWORD_FILE: examples/database-owner-password.example
-          STATEBACK_DATABASE_RUNTIME_PASSWORD_FILE: examples/database-runtime-password.example
-          STATEBACK_DATABASE_MIGRATION_URL_FILE: examples/database-migration-url.example
-          STATEBACK_DATABASE_RUNTIME_URL_FILE: examples/database-runtime-url.example
-          STATEBACK_NATS_CONFIG_FILE: examples/nats.conf.example
-          STATEBACK_NATS_BOOTSTRAP_URL_FILE: examples/nats-bootstrap-url.example
-          STATEBACK_NATS_URL_FILE: examples/nats-url.example
-          STATEBACK_POLICY_CONFIG_FILE: examples/policy.json.example
-          STATEBACK_AUTH_CONFIG_FILE: examples/auth.json.example
+          STATEBACK_DATABASE_OWNER_PASSWORD_FILE: deploy/examples/database-owner-password.example
+          STATEBACK_DATABASE_RUNTIME_PASSWORD_FILE: deploy/examples/database-runtime-password.example
+          STATEBACK_DATABASE_MIGRATION_URL_FILE: deploy/examples/database-migration-url.example
+          STATEBACK_DATABASE_RUNTIME_URL_FILE: deploy/examples/database-runtime-url.example
+          STATEBACK_NATS_CONFIG_FILE: deploy/examples/nats.conf.example
+          STATEBACK_NATS_BOOTSTRAP_URL_FILE: deploy/examples/nats-bootstrap-url.example
+          STATEBACK_NATS_URL_FILE: deploy/examples/nats-url.example
+          STATEBACK_POLICY_CONFIG_FILE: deploy/examples/policy.json.example
+          STATEBACK_AUTH_CONFIG_FILE: deploy/examples/auth.json.example
         run: docker compose -f deploy/compose.yaml config --quiet
       - name: Build runtime image
-        run: docker build -f deploy/Dockerfile -t ghcr.io/mominrkhan/stateback:0.1.0 .
+        run: docker build --build-arg STATEBACK_VERSION="$STATEBACK_VERSION" -f deploy/Dockerfile -t "ghcr.io/mominrkhan/stateback:$STATEBACK_VERSION" .
       - name: Build frontend image
-        run: docker build -f deploy/frontend.Dockerfile -t ghcr.io/mominrkhan/stateback-frontend:0.1.0 .
+        run: docker build --build-arg STATEBACK_VERSION="$STATEBACK_VERSION" -f deploy/frontend.Dockerfile -t "ghcr.io/mominrkhan/stateback-frontend:$STATEBACK_VERSION" .
       - name: Report all runtime image findings
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
-          image-ref: ghcr.io/mominrkhan/stateback:0.1.0
+          image-ref: ghcr.io/mominrkhan/stateback:${{ env.STATEBACK_VERSION }}
           scanners: vuln,secret,misconfig
           severity: HIGH,CRITICAL
           exit-code: "0"
       - name: Block fix-available runtime image findings
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
-          image-ref: ghcr.io/mominrkhan/stateback:0.1.0
+          image-ref: ghcr.io/mominrkhan/stateback:${{ env.STATEBACK_VERSION }}
           scanners: vuln,secret,misconfig
           severity: HIGH,CRITICAL
           ignore-unfixed: true
@@ -134,14 +142,14 @@ jobs:
       - name: Report all frontend image findings
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
-          image-ref: ghcr.io/mominrkhan/stateback-frontend:0.1.0
+          image-ref: ghcr.io/mominrkhan/stateback-frontend:${{ env.STATEBACK_VERSION }}
           scanners: vuln,secret,misconfig
           severity: HIGH,CRITICAL
           exit-code: "0"
       - name: Block fix-available frontend image findings
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
-          image-ref: ghcr.io/mominrkhan/stateback-frontend:0.1.0
+          image-ref: ghcr.io/mominrkhan/stateback-frontend:${{ env.STATEBACK_VERSION }}
           scanners: vuln,secret,misconfig
           severity: HIGH,CRITICAL
           ignore-unfixed: true

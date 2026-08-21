@@ -1,23 +1,26 @@
 # syntax=docker/dockerfile:1.7
 ARG SOURCE_DATE_EPOCH=0
+ARG STATEBACK_VERSION=0.1.0
 FROM ghcr.io/astral-sh/uv:0.12.5@sha256:e85be844203885286c60ffad8a858d48afb6c5a5c237ca0e67f12e74b8f174b1 AS uv
 FROM python:3.12.14-slim-bookworm@sha256:a116514e19457bcb7af7efe9c3dd0b9b71e85b317694e7882a1c52aa15a78134 AS build
 
 ARG SOURCE_DATE_EPOCH
+ARG STATEBACK_VERSION=0.1.0
 COPY --from=uv /uv /usr/local/bin/uv
 WORKDIR /app
 COPY pyproject.toml uv.lock README.md ./
 COPY src ./src
 RUN uv sync --frozen --no-dev --no-editable \
-    && rm /app/.venv/lib/python3.12/site-packages/stateback-0.1.0.dist-info/uv_cache.json \
-    && sed -i '\|stateback-0.1.0.dist-info/uv_cache.json|d' \
-        /app/.venv/lib/python3.12/site-packages/stateback-0.1.0.dist-info/RECORD
+    && dist_info="/app/.venv/lib/python3.12/site-packages/stateback-${STATEBACK_VERSION}.dist-info" \
+    && rm "$dist_info/uv_cache.json" \
+    && sed -i "\|stateback-${STATEBACK_VERSION}.dist-info/uv_cache.json|d" "$dist_info/RECORD"
 
 FROM python:3.12.14-slim-bookworm@sha256:a116514e19457bcb7af7efe9c3dd0b9b71e85b317694e7882a1c52aa15a78134
 ARG SOURCE_DATE_EPOCH
+ARG STATEBACK_VERSION=0.1.0
 ARG STATEBACK_SOURCE_REVISION=unknown
 LABEL org.opencontainers.image.title="Stateback" \
-      org.opencontainers.image.version="0.1.0" \
+      org.opencontainers.image.version="${STATEBACK_VERSION}" \
       org.opencontainers.image.source="https://github.com/mominrkhan/stateback" \
       org.opencontainers.image.revision="${STATEBACK_SOURCE_REVISION}" \
       org.opencontainers.image.licenses="MIT"
