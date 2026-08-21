@@ -59,7 +59,10 @@ class ModelSummaryOutput(StrictModel):
             ):
                 raise ValueError("available output requires summary and confidence")
         elif (
-            self.summary is not None or self.key_events or self.unresolved_uncertainties
+            self.summary is not None
+            or self.key_events
+            or self.unresolved_uncertainties
+            or self.confidence is not None
         ):
             raise ValueError("abstained output cannot contain advisory content")
         return self

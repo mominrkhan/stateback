@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 
 from sqlalchemy.orm import Session, sessionmaker
@@ -21,6 +22,7 @@ from stateback.providers.registry import CapabilityRegistry
 from stateback.recovery import RecoveryService
 from stateback.runtime import SynchronousRuntime
 from stateback.runtime.clock import SystemClock
+from stateback.semantic import AuditSummaryService, OllamaSemanticModel
 
 
 @dataclass(frozen=True, slots=True)
@@ -31,6 +33,33 @@ class Services:
     recovery: RecoveryService
     compensation: CompensationService
     application: ApplicationService
+
+
+def _semantic_service() -> AuditSummaryService | None:
+    url = os.environ.get("STATEBACK_SEMANTIC_OLLAMA_URL")
+    model = os.environ.get("STATEBACK_SEMANTIC_OLLAMA_MODEL")
+    timeout = os.environ.get("STATEBACK_SEMANTIC_OLLAMA_TIMEOUT")
+    configured = (url, model, timeout)
+    if not any(value is not None for value in configured):
+        return None
+    if not all(value is not None and value.strip() for value in configured):
+        raise RuntimeError(
+            "STATEBACK_SEMANTIC_OLLAMA_URL, _MODEL, and _TIMEOUT must be set together"
+        )
+    assert url is not None and model is not None and timeout is not None
+    try:
+        timeout_seconds = float(timeout)
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError(
+            "STATEBACK_SEMANTIC_OLLAMA_TIMEOUT must be a number"
+        ) from exc
+    try:
+        model_client = OllamaSemanticModel(
+            base_url=url, model=model, timeout_seconds=timeout_seconds
+        )
+    except ValueError as exc:
+        raise RuntimeError("semantic Ollama configuration is invalid") from exc
+    return AuditSummaryService(semantic_model=model_client)
 
 
 def build_services(*, require_auth: bool, execute_providers: bool) -> Services:
@@ -80,6 +109,7 @@ def build_services(*, require_auth: bool, execute_providers: bool) -> Services:
         recovery=recovery,
         compensation=compensation,
         registry=registry,
+        semantic_summaries=_semantic_service(),
     )
     return Services(
         session_factory=factory,

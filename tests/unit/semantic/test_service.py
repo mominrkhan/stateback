@@ -95,6 +95,7 @@ def test_secret_shaped_timeline_text_is_redacted_before_model() -> None:
         json.dumps(
             {"status": "SUCCEEDED", "summary": "effect happened", "confidence": 1.0}
         ),
+        json.dumps({"status": "ABSTAINED", "confidence": 0.9}),
     ],
 )
 def test_invalid_or_authoritative_shaped_output_is_rejected(content: str) -> None:
