@@ -1,6 +1,7 @@
 import errorFixture from "../test/contract-fixtures/error-v1.json";
 import listFixture from "../test/contract-fixtures/operation-list-v1.json";
 import reconstructionFixture from "../test/contract-fixtures/reconstruction-empty-verifications-v1.json";
+import verificationFixture from "../test/contract-fixtures/reconstruction-verification-v1.json";
 import semanticFixture from "../test/contract-fixtures/semantic-unavailable-v1.json";
 import { ParseFailure } from "./errors";
 import { parseApiError, parseOperationPage, parseReconstruction, parseSemanticSummary } from "./parsers";
@@ -29,10 +30,10 @@ describe("contract parsers", () => {
     expect(() => parseOperationPage(fixture)).toThrow(expect.objectContaining<Partial<ParseFailure>>({ field }));
   });
 
-  it("fails closed on the unresolved non-empty verification history shape", () => {
-    const fixture: Record<string, unknown> = structuredClone(reconstructionFixture);
-    fixture.verifications = [{ request: {}, result: null }];
-    expect(() => parseReconstruction(fixture)).toThrow("reconstruction.verifications: unsupported verification-history wire shape");
+  it("parses the backend verification request/result history shape", () => {
+    const parsed = parseReconstruction(verificationFixture);
+    expect(parsed.verifications).toHaveLength(1);
+    expect(parsed.verifications[0].result?.outcome).toBe("APPLIED");
   });
 
   it("enforces semantic content limits and status coupling", () => {

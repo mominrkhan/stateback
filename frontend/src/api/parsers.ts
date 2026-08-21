@@ -3,6 +3,7 @@ import type {
   Approval, AuditEvent, Compensation, CompensationAttempt, ExecutionAttempt, JsonValue,
   NormalizedError, Operation, OperationPage, PolicyDecision, PrincipalRef, ProviderEvidence,
   Reconstruction, Reconciliation, SemanticStatus, SemanticSummary,
+  VerificationOutcome, VerificationRecord, VerificationRequest, VerificationResult,
 } from "./types";
 
 function object(value: unknown, path: string): object {
@@ -62,6 +63,14 @@ function evidence(value: unknown, path: string): ProviderEvidence {
     evidence_fields: json(get(raw, "evidence_fields", path), `${path}.evidence_fields`), raw_reference: nullableStr(get(raw, "raw_reference", path), `${path}.raw_reference`),
   };
 }
+function effect(value: unknown, path: string) {
+  const raw = object(value, path);
+  return {
+    provider: str(get(raw, "provider", path), `${path}.provider`),
+    action: str(get(raw, "action", path), `${path}.action`),
+    version: str(get(raw, "version", path), `${path}.version`),
+  };
+}
 function normalizedError(value: unknown, path: string): NormalizedError {
   const raw = object(value, path); return { contract_version: version(raw, path), kind: str(get(raw, "kind", path), `${path}.kind`), code: str(get(raw, "code", path), `${path}.code`), message: str(get(raw, "message", path), `${path}.message`), retryable_infrastructure: bool(get(raw, "retryable_infrastructure", path), `${path}.retryable_infrastructure`), provider_http_status: nullableInteger(get(raw, "provider_http_status", path), `${path}.provider_http_status`, 100), provider_error_code: nullableStr(get(raw, "provider_error_code", path), `${path}.provider_error_code`), retry_after_seconds: nullableInteger(get(raw, "retry_after_seconds", path), `${path}.retry_after_seconds`), details: json(get(raw, "details", path), `${path}.details`) };
 }
@@ -85,16 +94,53 @@ function policy(value: unknown, path: string): PolicyDecision {
 function approval(value: unknown, path: string): Approval { const raw = object(value, path); const actor = get(raw, "decided_by", path); return { contract_version: version(raw, path), approval_id: str(get(raw, "approval_id", path), `${path}.approval_id`), operation_id: str(get(raw, "operation_id", path), `${path}.operation_id`), operation_version: integer(get(raw, "operation_version", path), `${path}.operation_version`, 1), intent_digest: str(get(raw, "intent_digest", path), `${path}.intent_digest`), policy_decision_id: str(get(raw, "policy_decision_id", path), `${path}.policy_decision_id`), state: str(get(raw, "state", path), `${path}.state`), requested_at: timestamp(get(raw, "requested_at", path), `${path}.requested_at`), expires_at: nullableTimestamp(get(raw, "expires_at", path), `${path}.expires_at`), decided_at: nullableTimestamp(get(raw, "decided_at", path), `${path}.decided_at`), decided_by: actor === null ? null : principal(actor, `${path}.decided_by`), reason: nullableStr(get(raw, "reason", path), `${path}.reason`) }; }
 function attempt(value: unknown, path: string): ExecutionAttempt { const raw = object(value, path); const ev = get(raw, "evidence", path); const err = get(raw, "error", path); return { contract_version: version(raw, path), attempt_id: str(get(raw, "attempt_id", path), `${path}.attempt_id`), operation_id: str(get(raw, "operation_id", path), `${path}.operation_id`), attempt_number: integer(get(raw, "attempt_number", path), `${path}.attempt_number`, 1), state: str(get(raw, "state", path), `${path}.state`), started_at: timestamp(get(raw, "started_at", path), `${path}.started_at`), completed_at: nullableTimestamp(get(raw, "completed_at", path), `${path}.completed_at`), provider_idempotency_key: nullableStr(get(raw, "provider_idempotency_key", path), `${path}.provider_idempotency_key`), external_operation_id: nullableStr(get(raw, "external_operation_id", path), `${path}.external_operation_id`), external_resource_ids: strings(get(raw, "external_resource_ids", path), `${path}.external_resource_ids`), outcome: nullableStr(get(raw, "outcome", path), `${path}.outcome`), evidence: ev === null ? null : evidence(ev, `${path}.evidence`), error: err === null ? null : normalizedError(err, `${path}.error`), correlation_id: nullableStr(get(raw, "correlation_id", path), `${path}.correlation_id`) }; }
 function reconciliation(value: unknown, path: string): Reconciliation { const raw = object(value, path); const decision = object(get(raw, "decision", path), `${path}.decision`); return { reconciliation_decision_id: str(get(raw, "reconciliation_decision_id", path), `${path}.reconciliation_decision_id`), operation_id: str(get(raw, "operation_id", path), `${path}.operation_id`), operation_version: integer(get(raw, "operation_version", path), `${path}.operation_version`, 1), verification_id: nullableStr(get(raw, "verification_id", path), `${path}.verification_id`), decision: { action: str(get(decision, "action", `${path}.decision`), `${path}.decision.action`), reason_code: str(get(decision, "reason_code", `${path}.decision`), `${path}.decision.reason_code`) }, created_at: timestamp(get(raw, "created_at", path), `${path}.created_at`) }; }
+function verification(value: unknown, path: string): VerificationRecord {
+  const raw = object(value, path);
+  const requestPath = `${path}.request`;
+  const requestRaw = object(get(raw, "request", path), requestPath);
+  const target = str(get(requestRaw, "target", requestPath), `${requestPath}.target`);
+  if (target !== "ORIGINAL_EFFECT" && target !== "COMPENSATION") throw new ParseFailure(`${requestPath}.target`, "unknown verification target");
+  const request: VerificationRequest = {
+    contract_version: version(requestRaw, requestPath),
+    verification_id: str(get(requestRaw, "verification_id", requestPath), `${requestPath}.verification_id`),
+    operation_id: str(get(requestRaw, "operation_id", requestPath), `${requestPath}.operation_id`),
+    operation_version: integer(get(requestRaw, "operation_version", requestPath), `${requestPath}.operation_version`, 1),
+    target,
+    target_attempt_id: nullableStr(get(requestRaw, "target_attempt_id", requestPath), `${requestPath}.target_attempt_id`),
+    effect: effect(get(requestRaw, "effect", requestPath), `${requestPath}.effect`),
+    external_operation_id: nullableStr(get(requestRaw, "external_operation_id", requestPath), `${requestPath}.external_operation_id`),
+    external_resource_ids: strings(get(requestRaw, "external_resource_ids", requestPath), `${requestPath}.external_resource_ids`),
+    idempotency_identity: str(get(requestRaw, "idempotency_identity", requestPath), `${requestPath}.idempotency_identity`),
+    provider_evidence_refs: strings(get(requestRaw, "provider_evidence_refs", requestPath), `${requestPath}.provider_evidence_refs`),
+    requested_at: timestamp(get(requestRaw, "requested_at", requestPath), `${requestPath}.requested_at`),
+  };
+  const resultValue = get(raw, "result", path);
+  const result: VerificationResult | null = resultValue === null ? null : (() => {
+    const resultPath = `${path}.result`;
+    const resultRaw = object(resultValue, resultPath);
+    const outcomeValue = str(get(resultRaw, "outcome", resultPath), `${resultPath}.outcome`);
+    if (!["APPLIED", "NOT_APPLIED", "UNKNOWN"].includes(outcomeValue)) throw new ParseFailure(`${resultPath}.outcome`, "unknown verification outcome");
+    const outcome = outcomeValue as VerificationOutcome;
+    const errorValue = get(resultRaw, "error", resultPath);
+    return {
+      contract_version: version(resultRaw, resultPath),
+      verification_id: str(get(resultRaw, "verification_id", resultPath), `${resultPath}.verification_id`),
+      outcome, evidence: evidence(get(resultRaw, "evidence", resultPath), `${resultPath}.evidence`),
+      error: errorValue === null ? null : normalizedError(errorValue, `${resultPath}.error`),
+      completed_at: timestamp(get(resultRaw, "completed_at", resultPath), `${resultPath}.completed_at`),
+    };
+  })();
+  return { request, result };
+}
 function compensation(value: unknown, path: string): Compensation { const raw = object(value, path); return { contract_version: version(raw, path), compensation_id: str(get(raw, "compensation_id", path), `${path}.compensation_id`), original_operation_id: str(get(raw, "original_operation_id", path), `${path}.original_operation_id`), kind: str(get(raw, "kind", path), `${path}.kind`), state: str(get(raw, "state", path), `${path}.state`), version: integer(get(raw, "version", path), `${path}.version`, 1), intent_digest: str(get(raw, "intent_digest", path), `${path}.intent_digest`), arguments_mode: str(get(raw, "arguments_mode", path), `${path}.arguments_mode`), arguments: json(get(raw, "arguments", path), `${path}.arguments`), arguments_ref: nullableStr(get(raw, "arguments_ref", path), `${path}.arguments_ref`), idempotency_identity: str(get(raw, "idempotency_identity", path), `${path}.idempotency_identity`), requested_by: principal(get(raw, "requested_by", path), `${path}.requested_by`), policy_decision_id: nullableStr(get(raw, "policy_decision_id", path), `${path}.policy_decision_id`), created_at: timestamp(get(raw, "created_at", path), `${path}.created_at`), updated_at: timestamp(get(raw, "updated_at", path), `${path}.updated_at`) }; }
 function compensationAttempt(value: unknown, path: string): CompensationAttempt { const raw = object(value, path); const ev = get(raw, "evidence", path); const err = get(raw, "error", path); return { contract_version: version(raw, path), compensation_attempt_id: str(get(raw, "compensation_attempt_id", path), `${path}.compensation_attempt_id`), compensation_id: str(get(raw, "compensation_id", path), `${path}.compensation_id`), attempt_number: integer(get(raw, "attempt_number", path), `${path}.attempt_number`, 1), state: str(get(raw, "state", path), `${path}.state`), started_at: timestamp(get(raw, "started_at", path), `${path}.started_at`), completed_at: nullableTimestamp(get(raw, "completed_at", path), `${path}.completed_at`), provider_idempotency_key: nullableStr(get(raw, "provider_idempotency_key", path), `${path}.provider_idempotency_key`), external_operation_id: nullableStr(get(raw, "external_operation_id", path), `${path}.external_operation_id`), outcome: nullableStr(get(raw, "outcome", path), `${path}.outcome`), evidence: ev === null ? null : evidence(ev, `${path}.evidence`), error: err === null ? null : normalizedError(err, `${path}.error`) }; }
 function audit(value: unknown, path: string): AuditEvent { const raw = object(value, path); const actor = get(raw, "actor", path); return { contract_version: version(raw, path), audit_event_id: str(get(raw, "audit_event_id", path), `${path}.audit_event_id`), operation_id: str(get(raw, "operation_id", path), `${path}.operation_id`), sequence: integer(get(raw, "sequence", path), `${path}.sequence`, 1), event_type: str(get(raw, "event_type", path), `${path}.event_type`), from_state: nullableStr(get(raw, "from_state", path), `${path}.from_state`), to_state: nullableStr(get(raw, "to_state", path), `${path}.to_state`), operation_version: integer(get(raw, "operation_version", path), `${path}.operation_version`, 1), actor: actor === null ? null : principal(actor, `${path}.actor`), reason_code: str(get(raw, "reason_code", path), `${path}.reason_code`), data: json(get(raw, "data", path), `${path}.data`), correlation_id: nullableStr(get(raw, "correlation_id", path), `${path}.correlation_id`), created_at: timestamp(get(raw, "created_at", path), `${path}.created_at`) }; }
 function mapped<T>(value: unknown, path: string, parser: (item: unknown, itemPath: string) => T): T[] { return array(value, path).map((item, i) => parser(item, `${path}[${i}]`)); }
 
 export function parseReconstruction(value: unknown): Reconstruction {
-  const raw = object(value, "reconstruction"); const verificationValues = array(get(raw, "verifications", "reconstruction"), "reconstruction.verifications");
-  if (verificationValues.length !== 0) throw new ParseFailure("reconstruction.verifications", "unsupported verification-history wire shape");
+  const raw = object(value, "reconstruction");
   const comp = get(raw, "compensation", "reconstruction");
-  return { contract_version: version(raw, "reconstruction"), operation: parseOperation(get(raw, "operation", "reconstruction"), "reconstruction.operation"), policy_decisions: mapped(get(raw, "policy_decisions", "reconstruction"), "reconstruction.policy_decisions", policy), approvals: mapped(get(raw, "approvals", "reconstruction"), "reconstruction.approvals", approval), attempts: mapped(get(raw, "attempts", "reconstruction"), "reconstruction.attempts", attempt), verifications: [], reconciliations: mapped(get(raw, "reconciliations", "reconstruction"), "reconstruction.reconciliations", reconciliation), compensation: comp === null ? null : compensation(comp, "reconstruction.compensation"), compensation_attempts: mapped(get(raw, "compensation_attempts", "reconstruction"), "reconstruction.compensation_attempts", compensationAttempt), audit: mapped(get(raw, "audit", "reconstruction"), "reconstruction.audit", audit), available_actions: strings(get(raw, "available_actions", "reconstruction"), "reconstruction.available_actions") };
+  return { contract_version: version(raw, "reconstruction"), operation: parseOperation(get(raw, "operation", "reconstruction"), "reconstruction.operation"), policy_decisions: mapped(get(raw, "policy_decisions", "reconstruction"), "reconstruction.policy_decisions", policy), approvals: mapped(get(raw, "approvals", "reconstruction"), "reconstruction.approvals", approval), attempts: mapped(get(raw, "attempts", "reconstruction"), "reconstruction.attempts", attempt), verifications: mapped(get(raw, "verifications", "reconstruction"), "reconstruction.verifications", verification), reconciliations: mapped(get(raw, "reconciliations", "reconstruction"), "reconstruction.reconciliations", reconciliation), compensation: comp === null ? null : compensation(comp, "reconstruction.compensation"), compensation_attempts: mapped(get(raw, "compensation_attempts", "reconstruction"), "reconstruction.compensation_attempts", compensationAttempt), audit: mapped(get(raw, "audit", "reconstruction"), "reconstruction.audit", audit), available_actions: strings(get(raw, "available_actions", "reconstruction"), "reconstruction.available_actions") };
 }
 
 export function parseSemanticSummary(value: unknown): SemanticSummary {

@@ -3,6 +3,7 @@ import { render, screen, within } from "@testing-library/react";
 import { parseReconstruction } from "../../api/parsers";
 import type { ProviderEvidence, Reconstruction } from "../../api/types";
 import emptyFixture from "../../test/contract-fixtures/reconstruction-empty-verifications-v1.json";
+import verificationFixture from "../../test/contract-fixtures/reconstruction-verification-v1.json";
 import { OperationDetailPage } from "./OperationDetailPage";
 
 const base = parseReconstruction(emptyFixture);
@@ -226,9 +227,19 @@ test("keeps provider evidence, attempt outcome, reconciliation, and compensation
   expect(screen.getAllByText("Provider evidence is distinct from verification and canonical operation state.")).toHaveLength(2);
   expect(screen.getByText("Provider outcome").nextElementSibling).toHaveTextContent("UNKNOWN");
   expect(screen.getByText("MANUAL_REVIEW: verification_unavailable")).toBeVisible();
-  expect(screen.getByText("Verification records are not available on the accepted v1 reconstruction wire. No verification result is inferred.")).toBeVisible();
+  expect(screen.getByText("No verification record is present.")).toBeVisible();
   expect(screen.getByText("BEST_EFFORT")).toBeVisible();
   expect(screen.getByText(/Compensation is a separate side effect/)).toBeVisible();
+});
+
+test("renders non-empty verification history without inferring canonical state", () => {
+  const withVerification: Reconstruction = parseReconstruction(verificationFixture);
+  render(<OperationDetailPage reconstruction={withVerification} />);
+  expect(screen.getByLabelText("verification ID: 00000000-0000-4000-8000-000000000002")).toBeVisible();
+  expect(screen.getByText("ORIGINAL_EFFECT: github / create_issue / v1")).toBeVisible();
+  expect(screen.getByText("Outcome: APPLIED")).toBeVisible();
+  expect(screen.getByText("Evidence: github — found")).toBeVisible();
+  expect(screen.queryByText("Verification records are not available")).not.toBeInTheDocument();
 });
 
 test("renders every audit event in backend order with durable IDs, actor, and correlations", () => {

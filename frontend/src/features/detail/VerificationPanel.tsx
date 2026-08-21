@@ -7,7 +7,26 @@ export function VerificationPanel({ reconstruction }: { reconstruction: Reconstr
   return (
     <section aria-labelledby="verification-heading">
       <h2 id="verification-heading">Verification and reconciliation</h2>
-      <p role="status">Verification records are not available on the accepted v1 reconstruction wire. No verification result is inferred.</p>
+      {reconstruction.verifications.length === 0 ? <EmptyDetail>No verification record is present.</EmptyDetail> : (
+        <ol aria-label="Verification history">
+          {reconstruction.verifications.map(({ request, result }) => (
+            <li key={request.verification_id}>
+              <CopyableId value={request.verification_id} label="verification ID" />
+              <p>{request.target}: {request.effect.provider} / {request.effect.action} / {request.effect.version}</p>
+              {request.target_attempt_id && <p>Attempt <CopyableId value={request.target_attempt_id} label="target attempt ID" /></p>}
+              {result ? (
+                <>
+                  <p>Outcome: {result.outcome}</p>
+                  <p>Evidence: {result.evidence.provider} — {result.evidence.provider_status ?? "Not recorded"}</p>
+                  {result.error && <p>Error: {result.error.code}</p>}
+                  <Timestamp value={result.completed_at} />
+                </>
+              ) : <p role="status">Verification result is pending.</p>}
+              <Timestamp value={request.requested_at} />
+            </li>
+          ))}
+        </ol>
+      )}
       <h3>Reconciliation decisions</h3>
       {reconstruction.reconciliations.length === 0 ? <EmptyDetail>No reconciliation decision is present.</EmptyDetail> : (
         <ol>

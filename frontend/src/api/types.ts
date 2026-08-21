@@ -80,6 +80,19 @@ export interface Reconciliation {
   reconciliation_decision_id: string; operation_id: string; operation_version: number;
   verification_id: string | null; decision: ReconciliationDecision; created_at: string;
 }
+export type VerificationTarget = "ORIGINAL_EFFECT" | "COMPENSATION";
+export type VerificationOutcome = "APPLIED" | "NOT_APPLIED" | "UNKNOWN";
+export interface VerificationRequest {
+  contract_version: "v1"; verification_id: string; operation_id: string; operation_version: number;
+  target: VerificationTarget; target_attempt_id: string | null; effect: EffectRef;
+  external_operation_id: string | null; external_resource_ids: string[];
+  idempotency_identity: string; provider_evidence_refs: string[]; requested_at: string;
+}
+export interface VerificationResult {
+  contract_version: "v1"; verification_id: string; outcome: VerificationOutcome; evidence: ProviderEvidence;
+  error: NormalizedError | null; completed_at: string;
+}
+export interface VerificationRecord { request: VerificationRequest; result: VerificationResult | null }
 export interface Compensation {
   contract_version: "v1"; compensation_id: string; original_operation_id: string; kind: string;
   state: string; version: number; intent_digest: string; arguments_mode: string; arguments: JsonValue;
@@ -99,7 +112,7 @@ export interface AuditEvent {
 }
 export interface Reconstruction {
   contract_version: "v1"; operation: Operation; policy_decisions: PolicyDecision[]; approvals: Approval[];
-  attempts: ExecutionAttempt[]; verifications: never[]; reconciliations: Reconciliation[];
+  attempts: ExecutionAttempt[]; verifications: VerificationRecord[]; reconciliations: Reconciliation[];
   compensation: Compensation | null; compensation_attempts: CompensationAttempt[]; audit: AuditEvent[];
   available_actions: string[];
 }
