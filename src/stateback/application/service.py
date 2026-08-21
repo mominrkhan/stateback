@@ -32,6 +32,7 @@ from stateback.domain.ids import OpaqueId
 from stateback.domain.operation import Operation
 from stateback.domain.policy import Approval, PolicyDecision
 from stateback.domain.secrets import key_is_forbidden, value_is_forbidden
+from stateback.domain.verification import VerificationRequest, VerificationResult
 from stateback.persistence.types import StoredReconciliationDecision
 from stateback.persistence.uow import unit_of_work
 from stateback.providers.exceptions import UnsupportedEffectError
@@ -98,7 +99,7 @@ class OperationReconstruction:
     policy_decisions: tuple[PolicyDecision, ...]
     approvals: tuple[Approval, ...]
     attempts: tuple[ExecutionAttempt, ...]
-    verifications: tuple[object, ...]
+    verifications: tuple[tuple[VerificationRequest, VerificationResult | None], ...]
     reconciliations: tuple[StoredReconciliationDecision, ...]
     compensation: object | None
     compensation_attempts: tuple[object, ...]
@@ -115,7 +116,13 @@ class OperationReconstruction:
             "policy_decisions": wires(self.policy_decisions),
             "approvals": wires(self.approvals),
             "attempts": wires(self.attempts),
-            "verifications": wires(self.verifications),
+            "verifications": [
+                {
+                    "request": request.to_wire(),
+                    "result": None if result is None else result.to_wire(),
+                }
+                for request, result in self.verifications
+            ],
             "reconciliations": [
                 _reconciliation_wire(value) for value in self.reconciliations
             ],

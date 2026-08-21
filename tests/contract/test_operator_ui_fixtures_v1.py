@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
@@ -33,6 +34,7 @@ from stateback.domain.jsonutil import json_from_plain
 from stateback.domain.operation import Operation
 from stateback.domain.refs import EffectRef, PrincipalRef
 from stateback.domain.time import UtcTimestamp
+from stateback.domain.verification import VerificationRequest, VerificationResult
 from stateback.semantic.models import SemanticStatus, empty_summary
 
 pytestmark = [pytest.mark.contract, pytest.mark.unit]
@@ -107,6 +109,26 @@ def test_empty_verification_reconstruction_matches_authoritative_serializer() ->
         available_actions=(),
     ).to_wire()
     assert _fixture("reconstruction-empty-verifications-v1.json") == wire
+
+
+def test_verification_reconstruction_serializes_request_and_result_records() -> None:
+    fixture = cast(dict[str, object], _fixture("reconstruction-verification-v1.json"))
+    records = cast(list[dict[str, object]], fixture["verifications"])
+    request = VerificationRequest.from_wire(records[0]["request"])
+    result = VerificationResult.from_wire(records[0]["result"])
+    wire = OperationReconstruction(
+        operation=replace(_operation(), latest_verification_id=request.verification_id),
+        policy_decisions=(),
+        approvals=(),
+        attempts=(),
+        verifications=((request, result),),
+        reconciliations=(),
+        compensation=None,
+        compensation_attempts=(),
+        audit=(),
+        available_actions=(),
+    ).to_wire()
+    assert wire == fixture
 
 
 def test_semantic_unavailable_fixture_matches_authoritative_serializer() -> None:

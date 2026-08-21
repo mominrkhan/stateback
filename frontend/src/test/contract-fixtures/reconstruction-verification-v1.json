@@ -1,0 +1,73 @@
+{
+  "contract_version": "v1",
+  "operation": {
+    "contract_version": "v1",
+    "operation_id": "00000000-0000-4000-8000-000000000001",
+    "state": "READY",
+    "version": 2,
+    "intent": {
+      "effect": { "provider": "github", "action": "create_issue", "version": "v1" },
+      "arguments_mode": "INLINE",
+      "arguments": { "owner": "example", "repo": "sandbox", "title": "Fixture issue" },
+      "arguments_ref": null,
+      "canonical_arguments_hash": "76bd6eb01822c0ece193c6b3418635f6cb77982d605cc4f159961ac5f60d9561",
+      "intent_digest": "4d36d2e5e10939e396e5949e86c9948fcc2fb11593745a33293b5b7a048f4567",
+      "requester": { "type": "AGENT", "id": "fixture-agent", "display_name": "Fixture Agent" },
+      "requested_at": "2026-08-20T12:00:00.000000Z",
+      "metadata": {}
+    },
+    "risk_level": "MODERATE",
+    "idempotency_identity": "sb:v1:op:00000000-0000-4000-8000-000000000001",
+    "current_policy_decision_id": null,
+    "current_approval_id": null,
+    "latest_attempt_id": null,
+    "latest_verification_id": "00000000-0000-4000-8000-000000000002",
+    "compensation_id": null,
+    "created_at": "2026-08-20T12:00:00.000000Z",
+    "updated_at": "2026-08-20T12:00:00.000000Z"
+  },
+  "policy_decisions": [],
+  "approvals": [],
+  "attempts": [],
+  "verifications": [
+    {
+      "request": {
+        "contract_version": "v1",
+        "verification_id": "00000000-0000-4000-8000-000000000002",
+        "operation_id": "00000000-0000-4000-8000-000000000001",
+        "operation_version": 2,
+        "target": "ORIGINAL_EFFECT",
+        "target_attempt_id": null,
+        "effect": { "provider": "github", "action": "create_issue", "version": "v1" },
+        "external_operation_id": "fixture-external-operation",
+        "external_resource_ids": ["issue-42"],
+        "idempotency_identity": "sb:v1:verify:00000000-0000-4000-8000-000000000002",
+        "provider_evidence_refs": [],
+        "requested_at": "2026-08-20T12:01:00.000000Z"
+      },
+      "result": {
+        "contract_version": "v1",
+        "verification_id": "00000000-0000-4000-8000-000000000002",
+        "outcome": "APPLIED",
+        "evidence": {
+          "source": "EXECUTION_RESPONSE",
+          "provider": "github",
+          "observed_at": "2026-08-20T12:01:01.000000Z",
+          "provider_status": "found",
+          "provider_request_id": null,
+          "external_operation_id": "fixture-external-operation",
+          "external_resource_ids": ["issue-42"],
+          "evidence_fields": {},
+          "raw_reference": null
+        },
+        "error": null,
+        "completed_at": "2026-08-20T12:01:01.000000Z"
+      }
+    }
+  ],
+  "reconciliations": [],
+  "compensation": null,
+  "compensation_attempts": [],
+  "audit": [],
+  "available_actions": []
+}
