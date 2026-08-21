@@ -110,6 +110,9 @@ def correctness(output: Path) -> int:
     python_nodes = [
         item.node_id for item in SCENARIOS if item.node_id.startswith("tests/")
     ]
+    frontend_node = next(
+        item.node_id for item in SCENARIOS if item.name == "operator_frontend_behavior"
+    )
     commands = [
         [
             sys.executable,
@@ -120,7 +123,13 @@ def correctness(output: Path) -> int:
             "benchmark_correctness",
             *python_nodes,
         ],
-        ["npm", "test", "--", "--run", "src/App.test.tsx"],
+        [
+            "npm",
+            "test",
+            "--",
+            "--run",
+            Path(frontend_node).relative_to("frontend").as_posix(),
+        ],
     ]
     results: list[dict[str, object]] = []
     exit_code = 0

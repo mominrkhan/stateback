@@ -105,7 +105,7 @@ SCENARIOS: tuple[CorrectnessScenario, ...] = (
     ),
     CorrectnessScenario(
         name="operator_frontend_behavior",
-        node_id="frontend/src/App.test.tsx",
+        node_id="frontend/src/app/App.test.tsx",
         final_truth="backend-derived state, confirmation, and safe unknown rendering",
     ),
 )
