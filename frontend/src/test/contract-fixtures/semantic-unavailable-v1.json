@@ -1,0 +1,13 @@
+{
+  "contract_version": "v1",
+  "advisory": true,
+  "status": "UNAVAILABLE",
+  "summary": null,
+  "key_events": [],
+  "unresolved_uncertainties": [],
+  "confidence": null,
+  "summarized_operation_version": 2,
+  "summarized_through_sequence": 0,
+  "provenance": { "provider": null, "model": null, "prompt_version": "audit-summary-v1", "output_schema_version": "v1" },
+  "reason_code": "semantic_not_configured"
+}

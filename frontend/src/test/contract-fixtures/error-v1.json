@@ -1,0 +1,4 @@
+{
+  "contract_version": "v1",
+  "error": { "code": "stale_version", "message": "stale version", "retryable": false, "correlation_id": null }
+}
