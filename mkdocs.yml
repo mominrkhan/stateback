@@ -1,0 +1,18 @@
+site_name: Stateback
+site_description: Transactions for AI agents
+repo_url: https://github.com/mominrkhan/stateback
+strict: true
+nav:
+  - Overview: index.md
+  - Architecture: architecture.md
+  - Safety model: safety-model.md
+  - Development: development.md
+  - Guarantees: guarantees.md
+  - API, SDK, and MCP: api.md
+  - Operator guide: operator.md
+  - Deployment: deployment.md
+  - Operations: operations.md
+  - Developer guide: developer.md
+  - Release process: release.md
+theme:
+  name: mkdocs
