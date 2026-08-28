@@ -149,6 +149,23 @@ main.login form {
   background: var(--color-surface);
 }
 
+main.login > p {
+  color: var(--color-text-muted);
+}
+
+main.login .login__brand {
+  margin: 0 0 var(--space-3);
+  color: var(--color-accent);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.16em;
+}
+
+main.login .login__error {
+  margin-bottom: 0;
+  color: var(--color-failure);
+}
+
 main.login form > span {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;

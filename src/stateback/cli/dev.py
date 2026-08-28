@@ -6,9 +6,11 @@ import asyncio
 import errno
 import fcntl
 import hashlib
+import ipaddress
 import json
 import os
 import re
+import secrets
 import signal
 import stat
 import urllib.error
@@ -20,7 +22,10 @@ from pathlib import Path
 from types import TracebackType
 from typing import Protocol, TextIO
 
+from pydantic import ValidationError
+
 from stateback import __version__
+from stateback.application.auth import Role
 from stateback.cli.config import ProjectConfig, load_project_config
 from stateback.cli.docker import (
     DockerRunner,
@@ -29,13 +34,15 @@ from stateback.cli.docker import (
     SocketPortChecker,
     compose_environment,
 )
-from stateback.cli.project import find_project_root
+from stateback.cli.project import find_project_root, replace_file
 from stateback.cli.supervisor import (
     Child,
     ProcessSupervisor,
     SupervisorError,
     run_one_shot,
 )
+from stateback.deployment.config import AuthConfig, IdentityConfig
+from stateback.domain.enums import PrincipalType
 from stateback.persistence.migrate import upgrade_head
 
 
@@ -137,7 +144,9 @@ def _compose_project(config: ProjectConfig) -> str:
     return f"stateback-{slug[:30] or 'project'}-{digest}"
 
 
-def _runtime_environment(config: ProjectConfig) -> dict[str, str]:
+def _runtime_environment(
+    config: ProjectConfig, *, auth_path: Path | None = None
+) -> dict[str, str]:
     environment = {
         name: value
         for name, value in os.environ.items()
@@ -156,7 +165,7 @@ def _runtime_environment(config: ProjectConfig) -> dict[str, str]:
                 f"nats://{config.dev.nats_host}:{config.dev.nats_port}"
             ),
             "STATEBACK_POLICY_CONFIG_FILE": str(config.paths.policy),
-            "STATEBACK_AUTH_CONFIG_FILE": str(config.paths.auth),
+            "STATEBACK_AUTH_CONFIG_FILE": str(auth_path or config.paths.auth),
             "STATEBACK_GITHUB_CONFIGURED": "1" if config.github_enabled else "0",
             "STATEBACK_API_HOST": config.dev.api_host,
             "STATEBACK_API_PORT": str(config.dev.api_port),
@@ -164,6 +173,55 @@ def _runtime_environment(config: ProjectConfig) -> dict[str, str]:
         }
     )
     return environment
+
+
+def _loopback_host(host: str) -> bool:
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def _create_dev_auth(
+    config: ProjectConfig, run_directory: Path
+) -> tuple[Path, str] | None:
+    """Create one ephemeral operator identity for a loopback dev process."""
+    if not _loopback_host(config.dev.api_host):
+        return None
+    try:
+        durable = AuthConfig.model_validate_json(config.paths.auth.read_bytes())
+    except (OSError, ValidationError) as exc:
+        raise DevError("Stateback authentication configuration is invalid") from exc
+    existing = {identity.token for identity in durable.identities}
+    token = secrets.token_urlsafe(32)
+    while token in existing:
+        token = secrets.token_urlsafe(32)
+    try:
+        runtime = AuthConfig(
+            identities=(
+                *durable.identities,
+                IdentityConfig(
+                    token=token,
+                    principal_type=PrincipalType.OPERATOR,
+                    principal_id="local-dev-session",
+                    display_name="Local development session",
+                    roles=frozenset((Role.OPERATOR, Role.APPROVER)),
+                ),
+            )
+        )
+    except ValidationError as exc:
+        raise DevError(
+            "Stateback authentication configuration cannot accept a dev session"
+        ) from exc
+    path = run_directory / "auth.json"
+    replace_file(
+        path,
+        (runtime.model_dump_json(indent=2) + "\n").encode(),
+        mode=0o600,
+    )
+    return path, token
 
 
 def _require_project_files(config: ProjectConfig) -> None:
@@ -258,8 +316,6 @@ async def run_dev(
         nats_port=config.dev.nats_port,
         monitor_port=config.dev.nats_monitor_port,
     )
-    runtime_env = _runtime_environment(config)
-    database_url = runtime_env["STATEBACK_DATABASE_URL"]
     stop = asyncio.Event()
     _install_signal_handlers(stop)
 
@@ -277,6 +333,11 @@ async def run_dev(
         ):
             port_checker.require_available(host, port, service)
 
+        dev_auth = _create_dev_auth(config, run_directory)
+        runtime_auth = None if dev_auth is None else dev_auth[0]
+        bootstrap_token = None if dev_auth is None else dev_auth[1]
+        runtime_env = _runtime_environment(config, auth_path=runtime_auth)
+        database_url = runtime_env["STATEBACK_DATABASE_URL"]
         runtime_supervisor = runtime or LocalRuntimeSupervisor(
             log_directory, show_output=not json_output
         )
@@ -341,15 +402,26 @@ async def run_dev(
                     )
                 )
             if open_browser:
-                await asyncio.to_thread(webbrowser.open, api_url)
+                browser_url = (
+                    api_url
+                    if bootstrap_token is None
+                    else f"{api_url}/#stateback-bootstrap={bootstrap_token}"
+                )
+                await asyncio.to_thread(webbrowser.open, browser_url)
             await runtime_supervisor.supervise(stop)
         except SupervisorError as exc:
             raise DevError(str(exc)) from exc
         finally:
-            await runtime_supervisor.shutdown()
-            if compose_attempted:
-                await docker_runner.compose_down(
-                    project=compose_project,
-                    compose_file=compose_file,
-                    environment=compose_env,
-                )
+            try:
+                await runtime_supervisor.shutdown()
+            finally:
+                try:
+                    if runtime_auth is not None:
+                        runtime_auth.unlink(missing_ok=True)
+                finally:
+                    if compose_attempted:
+                        await docker_runner.compose_down(
+                            project=compose_project,
+                            compose_file=compose_file,
+                            environment=compose_env,
+                        )

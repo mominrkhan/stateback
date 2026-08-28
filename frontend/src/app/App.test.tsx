@@ -5,11 +5,16 @@ import { useAuthSession } from "../auth/AuthSession";
 import { App } from "./App";
 
 function login(token = " opaque token ") {
-  fireEvent.change(screen.getByLabelText("Deployment access token"), { target: { value: token } });
-  fireEvent.click(screen.getByRole("button", { name: "Open operator console" }));
+  fireEvent.change(screen.getByLabelText("Access token"), { target: { value: token } });
+  fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
 }
 
-beforeEach(() => window.history.replaceState(null, "", "/"));
+beforeEach(() => {
+  window.history.replaceState(null, "", "/");
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValue(
+    new Response("{}", { status: 200, headers: { "Content-Type": "application/json" } }),
+  ));
+});
 
 test("root canonicalizes with replaceState after access and focuses operations", async () => {
   const replace = vi.spyOn(window.history, "replaceState");
@@ -44,7 +49,7 @@ test("logout purges the shell, replaces history, and focuses access", async () =
   renderWithSession(<App />);
   login();
   fireEvent.click(await screen.findByRole("button", { name: "Log out" }));
-  const access = await screen.findByRole("heading", { name: "Stateback Operator access" });
+  const access = await screen.findByRole("heading", { name: "Sign in to Stateback" });
   expect(window.location.pathname).toBe("/");
   expect(screen.queryByRole("navigation", { name: "Operator navigation" })).not.toBeInTheDocument();
   expect(access).toHaveFocus();
@@ -61,17 +66,29 @@ test("unauthorized clears the session and reports no identity or lifecycle claim
   login();
   fireEvent.click(await screen.findByRole("button", { name: "simulate 401" }));
   expect(await screen.findByRole("alert")).toHaveTextContent("Session expired or token rejected");
-  expect(screen.getByRole("heading", { name: "Stateback Operator access" })).toHaveFocus();
+  expect(screen.getByRole("heading", { name: "Sign in to Stateback" })).toHaveFocus();
   expect(screen.queryByText("Operations")).not.toBeInTheDocument();
 });
 
 test("access token visibility is deliberate and value is not remembered", async () => {
   renderWithSession(<App />);
-  const input = screen.getByLabelText("Deployment access token");
+  const input = screen.getByLabelText("Access token");
   expect(input).toHaveAttribute("type", "password");
   fireEvent.click(screen.getByRole("button", { name: "Show token" }));
   expect(input).toHaveAttribute("type", "text");
   login("token-value");
   fireEvent.click(await screen.findByRole("button", { name: "Log out" }));
-  expect(screen.getByLabelText("Deployment access token")).toHaveValue("");
+  expect(screen.getByLabelText("Access token")).toHaveValue("");
+});
+
+test("manual sign in distinguishes invalid credentials from an unreachable API", async () => {
+  vi.mocked(fetch).mockResolvedValueOnce(new Response("{}", { status: 401 }));
+  renderWithSession(<App />);
+  login("invalid-token");
+  expect(await screen.findByRole("alert")).toHaveTextContent("not accepted");
+
+  vi.mocked(fetch).mockRejectedValueOnce(new TypeError("network detail"));
+  login("another-token");
+  expect(await screen.findByRole("alert")).toHaveTextContent("could not be reached");
+  expect(screen.queryByText("network detail")).not.toBeInTheDocument();
 });

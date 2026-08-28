@@ -7,13 +7,15 @@ import signal
 import socket
 import sys
 from collections.abc import Mapping
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
 from stateback.cli import dev as dev_module
 from stateback.cli import docker as docker_module
-from stateback.cli.dev import DevError, DevLock, run_dev
+from stateback.cli.config import load_project_config
+from stateback.cli.dev import DevError, DevLock, _create_dev_auth, run_dev
 from stateback.cli.docker import DockerError, LocalDockerRunner, SocketPortChecker
 from stateback.cli.init import initialize
 from stateback.cli.supervisor import Child, ProcessSupervisor, SupervisorError
@@ -30,6 +32,7 @@ class FakeDocker:
         self.failure = failure
         self.up_failure = up_failure
         self.events: list[str] = []
+        self.api_environment: Mapping[str, str] = {}
 
     async def preflight(self) -> None:
         self.events.append("preflight")
@@ -77,6 +80,7 @@ class FakeRuntime:
         self.record("provision")
 
     async def start_api(self, environment: Mapping[str, str], ready_url: str) -> None:
+        self.api_environment = environment
         assert environment["STATEBACK_SERVE_OPERATOR_UI"] == "1"
         assert "STATEBACK_GITHUB_TOKEN_FILE" not in environment
         assert ready_url.endswith("/health/ready")
@@ -130,7 +134,51 @@ def test_dev_orchestrates_in_dependency_order_and_emits_json(
         "shutdown",
     ]
     assert "STATEBACK_GITHUB_TOKEN_FILE" not in runtime.worker_environment
+    assert runtime.api_environment["STATEBACK_AUTH_CONFIG_FILE"].endswith(
+        ".stateback/run/auth.json"
+    )
+    assert not (tmp_path / ".stateback/run/auth.json").exists()
     assert json.loads(capsys.readouterr().out)["status"] == "ready"
+
+
+def test_dev_uses_ephemeral_bootstrap_without_changing_permanent_auth(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    initialize(tmp_path)
+    permanent = tmp_path / ".stateback/auth.json"
+    original = permanent.read_bytes()
+    opened: list[str] = []
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("stateback.cli.dev.webbrowser.open", opened.append)
+
+    asyncio.run(
+        run_dev(
+            json_output=False,
+            open_browser=True,
+            docker=FakeDocker(),
+            ports=FreePorts(),
+            runtime=FakeRuntime(),
+        )
+    )
+
+    assert permanent.read_bytes() == original
+    assert len(opened) == 1
+    assert opened[0].startswith("http://127.0.0.1:8080/#stateback-bootstrap=")
+    token = opened[0].partition("=")[2]
+    assert len(token) >= 32
+    assert token not in capsys.readouterr().out
+    assert not (tmp_path / ".stateback/run/auth.json").exists()
+
+
+def test_dev_bootstrap_is_disabled_for_non_loopback_hosts(tmp_path: Path) -> None:
+    initialize(tmp_path)
+    config = load_project_config(tmp_path / "stateback.toml")
+    exposed = replace(config, dev=replace(config.dev, api_host="0.0.0.0"))
+
+    assert _create_dev_auth(exposed, tmp_path / ".stateback/run") is None
+    assert not (tmp_path / ".stateback/run/auth.json").exists()
 
 
 def test_github_token_path_is_given_only_to_worker(
@@ -279,6 +327,33 @@ def test_signal_event_drives_graceful_cleanup(
     )
 
     assert runtime.events[-2:] == ["supervise", "shutdown"]
+    assert docker.events[-1] == "down"
+
+
+def test_shutdown_failure_still_removes_runtime_auth_and_stops_compose(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class FailingShutdown(FakeRuntime):
+        async def shutdown(self) -> None:
+            self.record("shutdown")
+            raise RuntimeError("shutdown failed")
+
+    initialize(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    docker = FakeDocker()
+
+    with pytest.raises(RuntimeError, match="shutdown failed"):
+        asyncio.run(
+            run_dev(
+                json_output=True,
+                open_browser=False,
+                docker=docker,
+                ports=FreePorts(),
+                runtime=FailingShutdown(),
+            )
+        )
+
+    assert not (tmp_path / ".stateback/run/auth.json").exists()
     assert docker.events[-1] == "down"
 
 

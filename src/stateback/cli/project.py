@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import stat
+import tempfile
 from pathlib import Path
 
 
@@ -55,3 +56,29 @@ def create_file(path: Path, content: bytes, *, mode: int) -> bool:
     if actual_mode & ~mode:
         path.chmod(mode)
     return True
+
+
+def replace_file(path: Path, content: bytes, *, mode: int) -> None:
+    """Atomically replace one project file without following symlinks."""
+    if path.is_symlink() or (path.exists() and not path.is_file()):
+        raise ProjectFileError(f"refusing unsafe project file: {path}")
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
+    )
+    temporary = Path(temporary_name)
+    try:
+        os.fchmod(descriptor, mode)
+        with os.fdopen(descriptor, "wb") as stream:
+            stream.write(content)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+        if os.name == "posix":
+            directory = os.open(path.parent, os.O_RDONLY)
+            try:
+                os.fsync(directory)
+            finally:
+                os.close(directory)
+    except Exception:
+        temporary.unlink(missing_ok=True)
+        raise

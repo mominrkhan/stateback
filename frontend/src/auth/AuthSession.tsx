@@ -24,11 +24,31 @@ export interface AuthSessionValue {
 
 const AuthSessionContext = createContext<AuthSessionValue | null>(null);
 
-export function AuthSession({ children }: { children: ReactNode }) {
-  const tokenRef = useRef("");
+const BOOTSTRAP_PREFIX = "#stateback-bootstrap=";
+const DEV_TOKEN = /^[A-Za-z0-9_-]{32,128}$/u;
+
+export function consumeBootstrapToken(): string | null {
+  if (!window.location.hash.startsWith(BOOTSTRAP_PREFIX)) return null;
+  const token = window.location.hash.slice(BOOTSTRAP_PREFIX.length);
+  window.history.replaceState(
+    window.history.state,
+    "",
+    `${window.location.pathname}${window.location.search}`,
+  );
+  return DEV_TOKEN.test(token) ? token : null;
+}
+
+export function AuthSession({
+  children,
+  initialToken = null,
+}: {
+  children: ReactNode;
+  initialToken?: string | null;
+}) {
+  const tokenRef = useRef(initialToken ?? "");
   const generationRef = useRef(0);
   const abortControllers = useRef(new Set<AbortController>());
-  const [authenticated, setAuthenticated] = useState(false);
+  const [authenticated, setAuthenticated] = useState(Boolean(initialToken));
   const [sessionGeneration, setSessionGeneration] = useState(0);
   const [accessMessage, setAccessMessage] = useState<string | null>(null);
 

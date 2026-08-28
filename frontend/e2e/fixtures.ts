@@ -230,6 +230,6 @@ export async function installApi(page: Page, state: ApiScenario) {
 
 export async function login(page: Page, path = "/") {
   await page.goto(path);
-  await page.getByLabel("Deployment access token").fill("browser-test-token");
-  await page.getByRole("button", { name: "Open operator console" }).click();
+  await page.getByLabel("Access token").fill("browser-test-token");
+  await page.getByRole("button", { name: "Sign in" }).click();
 }

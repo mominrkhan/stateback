@@ -94,9 +94,11 @@ assert_stopped() {
   fi
   [[ ! -e .stateback/run/relay.ready ]]
   [[ ! -e .stateback/run/worker.ready ]]
+  [[ ! -e .stateback/run/auth.json ]]
 }
 
 start_dev "$test_root/dev-first.log"
+[[ -f .stateback/run/auth.json ]]
 curl --silent --show-error --fail "http://127.0.0.1:$api_port/health/ready" >/dev/null
 curl --silent --show-error --fail "http://127.0.0.1:$api_port/" | grep -q "Stateback Operator"
 postgres_id=$(docker ps -q \

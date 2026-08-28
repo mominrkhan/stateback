@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
 
-import { AuthSession, useAuthSession } from "./AuthSession";
+import { AuthSession, consumeBootstrapToken, useAuthSession } from "./AuthSession";
 
 function Probe() {
   const session = useAuthSession();
@@ -32,4 +32,27 @@ test("keeps the opaque token exact in memory and aborts on unauthorized", () => 
   expect(screen.getByLabelText("current-generation")).toHaveTextContent("false");
   expect(localStorage).toHaveLength(0);
   expect(sessionStorage).toHaveLength(0);
+});
+
+test("consumes a valid dev bootstrap from the fragment without persistent storage", () => {
+  const token = "a".repeat(43);
+  window.history.replaceState(null, "", `/operations#stateback-bootstrap=${token}`);
+  const bootstrap = consumeBootstrapToken();
+  render(<AuthSession initialToken={bootstrap}><Probe /></AuthSession>);
+
+  expect(window.location.hash).toBe("");
+  expect(window.location.pathname).toBe("/operations");
+  expect(screen.getByLabelText("token")).toHaveTextContent(token);
+  expect(localStorage).toHaveLength(0);
+  expect(sessionStorage).toHaveLength(0);
+});
+
+test("clears malformed bootstrap fragments and keeps authentication closed", () => {
+  window.history.replaceState(null, "", "/#stateback-bootstrap=not+a+dev+token");
+  const bootstrap = consumeBootstrapToken();
+  render(<AuthSession initialToken={bootstrap}><Probe /></AuthSession>);
+
+  expect(bootstrap).toBeNull();
+  expect(window.location.hash).toBe("");
+  expect(screen.getByLabelText("token")).toHaveTextContent("");
 });

@@ -10,6 +10,7 @@ from pathlib import Path
 
 from stateback import __version__
 from stateback.cli.config import ProjectConfigError
+from stateback.cli.connect import connect_github
 from stateback.cli.dev import DevError, run_dev
 from stateback.cli.init import initialize
 from stateback.cli.project import ProjectFileError
@@ -33,6 +34,9 @@ def _parser() -> argparse.ArgumentParser:
     dev.add_argument(
         "--no-browser", action="store_true", help="do not open the Operator UI"
     )
+
+    connect = commands.add_parser("connect", help="connect a provider")
+    connect.add_argument("provider", choices=("github",))
 
     descriptions = {
         "api": "run the API process (advanced)",
@@ -65,18 +69,27 @@ def _print_init(result_json: bool) -> None:
         "stateback.policy.json": "stateback.policy.json already exists",
         ".stateback/auth.json": "local credentials already exist",
     }
+    if result.created:
+        print("Stateback initialized\n")
+    else:
+        print("Stateback is already initialized\n")
     for path in result.created:
         if path in created_labels:
             print(f"✓ {created_labels[path]}")
     for path in result.existing:
         if path in existing_labels:
             print(f"✓ {existing_labels[path]}")
-    print()
     if result.created:
-        print("Stateback initialized.")
         print("\nNext:\n  stateback dev")
-    else:
-        print("Stateback is already initialized.")
+
+
+def _connect_github() -> None:
+    print("Connecting GitHub...\n")
+    connection = connect_github()
+    print(f"✓ Authenticated as {connection.account}")
+    print("✓ Credential stored securely")
+    print("✓ GitHub provider enabled")
+    print("\nGitHub is connected.")
 
 
 def main() -> None:
@@ -94,8 +107,16 @@ def main() -> None:
                 run_dev(json_output=args.json, open_browser=not args.no_browser)
             )
             return
+        if args.command == "connect":
+            _connect_github()
+            return
         run_process(args.command)
-    except (DevError, ProjectConfigError, ProjectFileError, RuntimeError) as exc:
+    except (
+        DevError,
+        ProjectConfigError,
+        ProjectFileError,
+        RuntimeError,
+    ) as exc:
         if getattr(args, "json", False):
             print(
                 json.dumps(

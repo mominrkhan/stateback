@@ -83,8 +83,8 @@ test("authentication canonicalizes root, keeps credentials memory-only, and logo
   await installApi(page, state);
   await page.goto("/");
   await expectAxeClean(page);
-  await page.getByLabel("Deployment access token").fill("browser-test-token");
-  await page.getByRole("button", { name: "Open operator console" }).click();
+  await page.getByLabel("Access token").fill("browser-test-token");
+  await page.getByRole("button", { name: "Sign in" }).click();
 
   await expect(page).toHaveURL(/\/operations$/);
   await expect(page.getByRole("heading", { name: "Operations", level: 1 })).toBeFocused();
@@ -97,7 +97,7 @@ test("authentication canonicalizes root, keeps credentials memory-only, and logo
 
   await page.getByRole("button", { name: "Log out" }).click();
   await expect(page).toHaveURL(/\/$/);
-  await expect(page.getByRole("heading", { name: "Stateback Operator access" })).toBeFocused();
+  await expect(page.getByRole("heading", { name: "Sign in to Stateback" })).toBeFocused();
   await expect(page.getByText(FIRST_ID)).toHaveCount(0);
 });
 
@@ -110,7 +110,7 @@ test("a 401 clears the session and returns focus to access", async ({ page }) =>
   await page.getByRole("button", { name: "Apply filters" }).click();
   await expect(page.getByRole("alert")).toContainText(/session expired/i);
   await expectAxeClean(page);
-  await expect(page.getByRole("heading", { name: "Stateback Operator access" })).toBeFocused();
+  await expect(page.getByRole("heading", { name: "Sign in to Stateback" })).toBeFocused();
   await expect(page).toHaveURL(/\/$/);
   expect(await page.evaluate(() => localStorage.length + sessionStorage.length)).toBe(0);
 });
@@ -302,7 +302,7 @@ test("direct entry, refresh, Back, Forward, and not-found routing remain accessi
   await page.goForward();
   await expect(page.getByRole("heading", { name: "Approvals", level: 1 })).toBeFocused();
   await page.reload();
-  await expect(page.getByRole("heading", { name: "Stateback Operator access" })).toBeFocused();
+  await expect(page.getByRole("heading", { name: "Sign in to Stateback" })).toBeFocused();
   await login(page, "/missing-route");
   await expect(page.getByRole("heading", { name: "Page not found" })).toBeVisible();
   await expectAxeClean(page);
@@ -322,7 +322,7 @@ test("a response from the previous logged-out session cannot repopulate operator
   await page.getByRole("button", { name: "Log out" }).click();
   release();
   await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
-  await expect(page.getByRole("heading", { name: "Stateback Operator access" })).toBeFocused();
+  await expect(page.getByRole("heading", { name: "Sign in to Stateback" })).toBeFocused();
   await expect(page.getByText(FIRST_ID)).toHaveCount(0);
 });
 
