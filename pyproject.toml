@@ -18,7 +18,7 @@ dependencies = [
 ]
 
 [project.scripts]
-stateback = "stateback.deployment.processes:main"
+stateback = "stateback.cli.main:main"
 
 [build-system]
 requires = ["hatchling==1.32.0"]

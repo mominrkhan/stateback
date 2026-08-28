@@ -30,7 +30,6 @@ RUN groupadd --gid 10001 stateback \
 WORKDIR /app
 COPY --from=build --chown=stateback:stateback /app/.venv /app/.venv
 COPY --chown=stateback:stateback alembic.ini ./
-COPY --chown=stateback:stateback alembic ./alembic
 COPY --chown=stateback:stateback LICENSE /licenses/LICENSE
 ENV PATH="/app/.venv/bin:${PATH}" \
     PYTHONUNBUFFERED=1 \

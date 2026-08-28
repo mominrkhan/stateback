@@ -5,6 +5,7 @@ Revises: None
 """
 
 from collections.abc import Sequence
+from uuid import UUID
 
 import sqlalchemy as sa
 from alembic import op
@@ -83,7 +84,7 @@ def _in_sql(column: str, values: tuple[str, ...]) -> str:
     return f"{column} IN ({quoted})"
 
 
-def _uuid() -> postgresql.UUID:
+def _uuid() -> postgresql.UUID[UUID]:
     return postgresql.UUID(as_uuid=True)
 
 

@@ -75,8 +75,6 @@ jobs:
           enable-cache: true
       - name: Install locked dependencies
         run: uv sync --frozen
-      - name: Build Python package
-        run: uv build
       - name: Build documentation
         run: uv run mkdocs build --strict
       - name: Audit Python dependencies
@@ -89,6 +87,21 @@ jobs:
       - name: Test and build frontend
         working-directory: frontend
         run: npm test -- --run && npm run build
+      - name: Bundle Operator UI in Python package
+        run: |
+          rm -rf src/stateback/operator_ui/static
+          mkdir -p src/stateback/operator_ui/static
+          cp -R frontend/dist/. src/stateback/operator_ui/static/
+          git diff --exit-code -- src/stateback/operator_ui/static
+      - name: Build Python package
+        run: uv build
+      - name: Test installed local development flow
+        env:
+          STATEBACK_E2E_API_PORT: "8080"
+          STATEBACK_E2E_POSTGRES_PORT: "5432"
+          STATEBACK_E2E_NATS_PORT: "4222"
+          STATEBACK_E2E_NATS_MONITOR_PORT: "8222"
+        run: bash .github/scripts/test-installed-dev.sh dist/*.whl
       - name: Audit frontend dependencies
         working-directory: frontend
         run: npm audit --package-lock-only --audit-level=high

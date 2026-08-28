@@ -1,0 +1,38 @@
+services:
+  postgres:
+    image: postgres:16.15
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: stateback
+      POSTGRES_PASSWORD: stateback_dev_only
+      POSTGRES_DB: stateback
+    ports:
+      - "127.0.0.1:${STATEBACK_POSTGRES_PORT}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U stateback -d stateback"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+      start_period: 5s
+
+  nats:
+    image: nats:2.12.6-alpine
+    restart: unless-stopped
+    command: ["-js", "-sd", "/data", "-m", "8222"]
+    ports:
+      - "127.0.0.1:${STATEBACK_NATS_PORT}:4222"
+      - "127.0.0.1:${STATEBACK_NATS_MONITOR_PORT}:8222"
+    volumes:
+      - nats_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8222/healthz || exit 1"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+      start_period: 3s
+
+volumes:
+  postgres_data:
+  nats_data:

@@ -60,6 +60,10 @@ jobs:
           npm --prefix frontend run build
           (cd frontend/dist && find . -type f -print0 | sort -z | xargs -0 sha256sum) > /tmp/frontend-b.sha256
           diff --unified /tmp/frontend-a.sha256 /tmp/frontend-b.sha256
+          rm -rf src/stateback/operator_ui/static
+          mkdir -p src/stateback/operator_ui/static
+          cp -R frontend/dist/. src/stateback/operator_ui/static/
+          git diff --exit-code -- src/stateback/operator_ui/static
       - name: Verify reproducible Python archives
         run: |
           export SOURCE_DATE_EPOCH="$(git show -s --format=%ct HEAD)"
@@ -68,6 +72,8 @@ jobs:
           (cd /tmp/package-a && sha256sum *) > /tmp/package-a.sha256
           (cd /tmp/package-b && sha256sum *) > /tmp/package-b.sha256
           diff --unified /tmp/package-a.sha256 /tmp/package-b.sha256
+      - name: Test installed local development flow
+        run: bash .github/scripts/test-installed-dev.sh /tmp/package-a/*.whl
       - name: Security and documentation gates
         run: |
           uv export --frozen --no-dev --no-emit-project --format requirements.txt --output-file /tmp/stateback-requirements.txt
@@ -158,6 +164,14 @@ jobs:
         with:
           version: "0.12.5"
           python-version: "3.12"
+      - name: Build packaged Operator UI
+        run: |
+          npm --prefix frontend ci
+          npm --prefix frontend run build
+          rm -rf src/stateback/operator_ui/static
+          mkdir -p src/stateback/operator_ui/static
+          cp -R frontend/dist/. src/stateback/operator_ui/static/
+          git diff --exit-code -- src/stateback/operator_ui/static
       - name: Build traceable Python archives
         run: SOURCE_DATE_EPOCH="$(git show -s --format=%ct HEAD)" uv build
       - uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3.0.0

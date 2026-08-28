@@ -49,7 +49,17 @@ CONSUMER_NAME = "stateback-worker-v1"
 QUARANTINE_STREAM_NAME = "STATEBACK_QUARANTINE_V1"
 QUARANTINE_CONSUMER_NAME = "stateback-quarantine-operator-v1"
 MAX_STREAM_MESSAGE_BYTES = 64 * 1024
-READINESS_PATH = Path("/tmp/stateback-ready")
+PROCESS_NAMES = (
+    "api",
+    "relay",
+    "worker",
+    "health",
+    "nats-init",
+    "db-privileges",
+    "quarantine-inspect",
+    "quarantine-replay",
+    "quarantine-discard",
+)
 
 _RUNTIME_TABLES = (
     "operations",
@@ -102,7 +112,21 @@ def create_api_application() -> FastAPI:
             session.execute(text("SELECT 1"))
         return {"status": "ready"}
 
+    if os.environ.get("STATEBACK_SERVE_OPERATOR_UI") == "1":
+        from importlib.resources import files
+
+        from stateback.operator_ui import SpaStaticFiles
+
+        static = files("stateback.operator_ui").joinpath("static")
+        app.mount(
+            "/", SpaStaticFiles(directory=str(static), html=True), name="operator-ui"
+        )
+
     return app
+
+
+def readiness_path() -> Path:
+    return Path(os.environ.get("STATEBACK_READINESS_PATH", "/tmp/stateback-ready"))
 
 
 def _stream_config() -> StreamConfig:
@@ -322,10 +346,10 @@ async def _jetstream() -> tuple[NatsClient, JetStreamContext]:
         nats_url = required_env("STATEBACK_NATS_URL")
 
     async def disconnected() -> None:
-        READINESS_PATH.unlink(missing_ok=True)
+        readiness_path().unlink(missing_ok=True)
 
     async def reconnected() -> None:
-        READINESS_PATH.write_text("ready\n", encoding="ascii")
+        readiness_path().write_text("ready\n", encoding="ascii")
 
     client = await nats.connect(
         nats_url,
@@ -461,7 +485,8 @@ def _stop_event() -> asyncio.Event:
 
 
 async def run_relay() -> None:
-    READINESS_PATH.unlink(missing_ok=True)
+    marker = readiness_path()
+    marker.unlink(missing_ok=True)
     factory = session_factory(create_engine_from_env())
     client, context = await _jetstream()
     relay = OutboxRelay(
@@ -479,7 +504,7 @@ async def run_relay() -> None:
     recovery_max_republishes = positive_int_env(
         "STATEBACK_OUTBOX_RECOVERY_MAX_REPUBLISHES", 3, maximum=20
     )
-    READINESS_PATH.write_text("ready\n", encoding="ascii")
+    marker.write_text("ready\n", encoding="ascii")
     try:
         while not stop.is_set():
             recovered = relay.recover_stranded(
@@ -494,12 +519,13 @@ async def run_relay() -> None:
                 except TimeoutError:
                     pass
     finally:
-        READINESS_PATH.unlink(missing_ok=True)
+        marker.unlink(missing_ok=True)
         await client.drain()
 
 
 async def run_worker() -> None:
-    READINESS_PATH.unlink(missing_ok=True)
+    marker = readiness_path()
+    marker.unlink(missing_ok=True)
     services = build_services(require_auth=False, execute_providers=True)
     max_deliveries = positive_int_env("STATEBACK_WORKER_MAX_DELIVERIES", 5, maximum=100)
     handler = WorkHandler(
@@ -521,7 +547,7 @@ async def run_worker() -> None:
         quarantine_publisher=JetStreamPublisher(context),
     )
     stop = _stop_event()
-    READINESS_PATH.write_text("ready\n", encoding="ascii")
+    marker.write_text("ready\n", encoding="ascii")
     try:
         while not stop.is_set():
             try:
@@ -530,12 +556,12 @@ async def run_worker() -> None:
                 continue
             await consumer.handle(messages[0])
     finally:
-        READINESS_PATH.unlink(missing_ok=True)
+        marker.unlink(missing_ok=True)
         await client.drain()
 
 
 def check_worker_health() -> None:
-    if not READINESS_PATH.is_file():
+    if not readiness_path().is_file():
         raise RuntimeError("process is not ready")
     engine = create_engine_from_env()
     try:
@@ -581,29 +607,13 @@ def configure_database_privileges() -> None:
         engine.dispose()
 
 
-def main() -> None:
-    import argparse
-
-    parser = argparse.ArgumentParser(prog="stateback")
-    parser.add_argument(
-        "process",
-        choices=(
-            "api",
-            "relay",
-            "worker",
-            "health",
-            "nats-init",
-            "db-privileges",
-            "quarantine-inspect",
-            "quarantine-replay",
-            "quarantine-discard",
-        ),
-    )
-    args = parser.parse_args()
-    if args.process == "health":
+def run_process(process: str) -> None:
+    if process not in PROCESS_NAMES:
+        raise RuntimeError(f"unknown Stateback process: {process}")
+    if process == "health":
         check_worker_health()
         return
-    if args.process == "api":
+    if process == "api":
         import uvicorn
 
         uvicorn.run(
@@ -615,19 +625,31 @@ def main() -> None:
             server_header=False,
         )
         return
-    if args.process == "nats-init":
+    if process == "nats-init":
         asyncio.run(provision_jetstream())
         return
-    if args.process == "db-privileges":
+    if process == "db-privileges":
         configure_database_privileges()
         return
-    if args.process == "quarantine-inspect":
+    if process == "quarantine-inspect":
         asyncio.run(inspect_quarantine())
         return
-    if args.process == "quarantine-replay":
+    if process == "quarantine-replay":
         asyncio.run(replay_quarantine())
         return
-    if args.process == "quarantine-discard":
+    if process == "quarantine-discard":
         asyncio.run(discard_quarantine())
         return
-    asyncio.run(run_relay() if args.process == "relay" else run_worker())
+    asyncio.run(run_relay() if process == "relay" else run_worker())
+
+
+def main() -> None:
+    import argparse
+
+    parser = argparse.ArgumentParser(prog="stateback")
+    parser.add_argument(
+        "process",
+        choices=PROCESS_NAMES,
+    )
+    args = parser.parse_args()
+    run_process(args.process)
