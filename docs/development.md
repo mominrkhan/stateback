@@ -112,10 +112,39 @@ npm --prefix frontend run test:e2e
 
 The Playwright suite requires its expected backend/environment.
 
-## Current CLI
+## Local project CLI
 
-The console entry point is `stateback.deployment.processes:main` and currently
-exposes:
+An installed package can initialize and run a complete local composition:
+
+```bash
+mkdir my-agent && cd my-agent
+stateback init
+stateback connect github  # optional; uses the authenticated GitHub CLI
+stateback dev
+```
+
+`stateback init` creates commit-safe `stateback.toml` and default-deny policy
+configuration plus ignored local credentials under `.stateback/`. Re-running it
+does not replace existing files or credentials. `stateback dev` starts local
+PostgreSQL and NATS with Docker, applies packaged migrations, validates
+JetStream, and supervises the API, relay, worker, and packaged Operator UI.
+Ordinary shutdown preserves the project-scoped database and NATS volumes.
+For loopback development, `stateback dev` adds a cryptographically random
+operator identity to a private runtime-only auth file and opens the UI with a
+URL-fragment bootstrap. The frontend removes the fragment immediately and
+keeps only that temporary development credential in same-tab `sessionStorage`
+so a refresh remains authenticated. Logout or a `401` clears it. Manually
+entered deployment credentials are never persisted by this mechanism, and the
+permanent `.stateback/auth.json` is unchanged. Automatic login is not enabled
+for a non-loopback API bind.
+
+`stateback connect github` checks `gh auth status`, verifies the authenticated
+account, stores the credential at the configured ignored token-file path with
+mode `0600` on POSIX, and enables `[providers.github]` atomically. It never puts
+the credential in process arguments, output, or `stateback.toml`. If `gh` is
+not authenticated, run `gh auth login` and retry the Stateback command.
+
+The advanced process commands remain available:
 
 ```text
 api
@@ -135,8 +164,8 @@ Use it as:
 uv run stateback <process>
 ```
 
-`stateback init`, `stateback dev`, and `stateback provider add ...` are not
-implemented.
+Use `stateback init --json` for machine-readable initialization output and
+`stateback dev --no-browser` when browser launch is undesirable.
 
 ## Application configuration
 

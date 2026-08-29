@@ -26,6 +26,35 @@ const AuthSessionContext = createContext<AuthSessionValue | null>(null);
 
 const BOOTSTRAP_PREFIX = "#stateback-bootstrap=";
 const DEV_TOKEN = /^[A-Za-z0-9_-]{32,128}$/u;
+const DEV_SESSION_KEY = "stateback.dev-bootstrap";
+
+function storeDevToken(token: string): void {
+  try {
+    window.sessionStorage.setItem(DEV_SESSION_KEY, token);
+  } catch {
+    // Storage can be unavailable; the current in-memory session still works.
+  }
+}
+
+function clearDevToken(): void {
+  try {
+    window.sessionStorage.removeItem(DEV_SESSION_KEY);
+  } catch {
+    // Clearing the in-memory credential remains authoritative for this tab.
+  }
+}
+
+export function restoreDevBootstrapToken(): string | null {
+  try {
+    const token = window.sessionStorage.getItem(DEV_SESSION_KEY);
+    if (token === null) return null;
+    if (DEV_TOKEN.test(token)) return token;
+    clearDevToken();
+  } catch {
+    return null;
+  }
+  return null;
+}
 
 export function consumeBootstrapToken(): string | null {
   if (!window.location.hash.startsWith(BOOTSTRAP_PREFIX)) return null;
@@ -35,7 +64,12 @@ export function consumeBootstrapToken(): string | null {
     "",
     `${window.location.pathname}${window.location.search}`,
   );
-  return DEV_TOKEN.test(token) ? token : null;
+  if (!DEV_TOKEN.test(token)) {
+    clearDevToken();
+    return null;
+  }
+  storeDevToken(token);
+  return token;
 }
 
 export function AuthSession({
@@ -67,6 +101,7 @@ export function AuthSession({
 
   const clearSession = useCallback((reason: SessionClearReason) => {
     tokenRef.current = "";
+    clearDevToken();
     abortRequests();
     generationRef.current += 1;
     setSessionGeneration(generationRef.current);
