@@ -114,9 +114,9 @@ export function OperationsPage({
     <section aria-labelledby="operations-heading">
       <header className="page-header">
         <div>
-          <p className="eyebrow">AUTHORITATIVE OPERATIONS</p>
+          <p className="eyebrow">PROTECTED ACTIONS</p>
           <h1 id="operations-heading" data-page-heading tabIndex={-1}>Operations</h1>
-          <p>Backend-ordered operations with canonical lifecycle state.</p>
+          <p>Inspect protected agent actions, their current status, and durable technical evidence.</p>
         </div>
         <OperationIdNavigation onNavigate={(operationId) => navigate(`/operations/${encodeURIComponent(operationId)}`)} />
       </header>
@@ -133,8 +133,8 @@ export function OperationsPage({
           <p>{page.error}</p>
         </DefensiveState>
       ) : page.items.length === 0 ? (
-        <DefensiveState kind="empty" title="No operations found">
-          <p>No operations match the exact filters.</p>
+        <DefensiveState kind="empty" title={search ? "No operations match these filters" : "No operations yet"}>
+          <p>{search ? "Try changing or clearing the current filters." : "Stateback is ready. Connect a provider and submit your first protected operation."}</p>
         </DefensiveState>
       ) : (
         <>

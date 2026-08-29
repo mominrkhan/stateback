@@ -9,4 +9,7 @@ describe("operationQuery", () => {
     expect(operationQuery()).toBe("");
     expect(() => operationQuery({ limit: 101 })).toThrow(RangeError);
   });
+  it("serializes the server-side needs-attention convenience filter", () => {
+    expect(operationQuery({ attention: true, limit: 50 })).toBe("?attention=true&limit=50");
+  });
 });

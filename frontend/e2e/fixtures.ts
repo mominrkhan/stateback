@@ -144,6 +144,16 @@ async function fulfillJson(route: Route, body: unknown, status = 200) {
 }
 
 export async function installApi(page: Page, state: ApiScenario) {
+  await page.route("**/v1/operator/overview", async (route) => {
+    await fulfillJson(route, {
+      contract_version: "v1",
+      total_operations: 1,
+      attention: { awaiting_approval: 0, unknown: 1, manual_intervention: 0, compensation_issues: 0 },
+      active: { executing: 0, verifying: 0, compensating: 0 },
+      recent_operations: [operation(FIRST_ID, "UNKNOWN")],
+      providers: [{ provider: "github", configured: false, supported_effects: [{ provider: "github", action: "create_issue", version: "v1" }] }],
+    });
+  });
   await page.route("**/v1/operator/operations**", async (route) => {
     const request = route.request();
     const url = new URL(request.url());

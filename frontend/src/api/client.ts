@@ -1,7 +1,7 @@
 import { ApiError, ClientFailure, ParseFailure } from "./errors";
-import { parseApiError, parseOperation, parseOperationPage, parseReconstruction, parseSemanticSummary } from "./parsers";
+import { parseApiError, parseOperation, parseOperationPage, parseOperatorOverview, parseReconstruction, parseSemanticSummary } from "./parsers";
 import { operationQuery, type OperationFilters } from "./query";
-import type { CommandAttempt, Operation, OperationPage, Reconstruction, SemanticSummary } from "./types";
+import type { CommandAttempt, Operation, OperationPage, OperatorOverview, Reconstruction, SemanticSummary } from "./types";
 
 export interface RequestDeadlines { readMs: number; semanticMs: number; commandMs: number }
 export interface OperatorClientOptions {
@@ -15,6 +15,7 @@ export interface OperatorClientOptions {
 }
 export interface OperatorClient {
   list(filters?: OperationFilters, signal?: AbortSignal): Promise<OperationPage>;
+  overview(signal?: AbortSignal): Promise<OperatorOverview>;
   reconstruct(operationId: string, signal?: AbortSignal): Promise<Reconstruction>;
   semanticSummary(operationId: string, signal?: AbortSignal): Promise<SemanticSummary>;
   command(attempt: CommandAttempt, signal?: AbortSignal): Promise<Operation>;
@@ -76,6 +77,10 @@ export function createOperatorClient(options: OperatorClientOptions): OperatorCl
   }
 
   return {
+    async overview(signal) {
+      const payload = await request("/v1/operator/overview", deadlines.readMs, false, { method: "GET" }, signal);
+      return parse(payload, parseOperatorOverview, false);
+    },
     async list(filters = {}, signal) {
       const payload = await request(`/v1/operator/operations${operationQuery(filters)}`, deadlines.readMs, false, { method: "GET" }, signal);
       return parse(payload, parseOperationPage, false);

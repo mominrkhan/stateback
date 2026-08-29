@@ -4,7 +4,7 @@ import reconstructionFixture from "../test/contract-fixtures/reconstruction-empt
 import verificationFixture from "../test/contract-fixtures/reconstruction-verification-v1.json";
 import semanticFixture from "../test/contract-fixtures/semantic-unavailable-v1.json";
 import { ParseFailure } from "./errors";
-import { parseApiError, parseOperationPage, parseReconstruction, parseSemanticSummary } from "./parsers";
+import { parseApiError, parseOperationPage, parseOperatorOverview, parseReconstruction, parseSemanticSummary } from "./parsers";
 
 describe("contract parsers", () => {
   it("parses authoritative list, reconstruction, semantic, and error fixtures", () => {
@@ -34,6 +34,19 @@ describe("contract parsers", () => {
     const parsed = parseReconstruction(verificationFixture);
     expect(parsed.verifications).toHaveLength(1);
     expect(parsed.verifications[0].result?.outcome).toBe("APPLIED");
+  });
+
+  it("strictly parses operator overview counts, operations, and provider configuration", () => {
+    const payload = {
+      contract_version: "v1", total_operations: 1,
+      attention: { awaiting_approval: 0, unknown: 1, manual_intervention: 0, compensation_issues: 0 },
+      active: { executing: 0, verifying: 0, compensating: 0 },
+      recent_operations: [listFixture.items[0]],
+      providers: [{ provider: "github", configured: true, supported_effects: [{ provider: "github", action: "create_issue", version: "v1" }] }],
+    };
+    expect(parseOperatorOverview(payload).providers[0].configured).toBe(true);
+    const malformed = structuredClone(payload); malformed.attention.unknown = -1;
+    expect(() => parseOperatorOverview(malformed)).toThrow("overview.attention.unknown");
   });
 
   it("enforces semantic content limits and status coupling", () => {

@@ -6,8 +6,12 @@ must not be used as proof of an external result.
 
 ## Reconstruct and search
 
+- `GET /v1/operator/overview` returns authoritative attention and active-state
+  counts, the eight most recent operations, and configured provider capability
+  metadata. It never returns provider credentials or calls a provider.
 - `GET /v1/operator/operations` searches by exact state/provider and UTC time
-  range with cursor pagination.
+  range with cursor pagination. `attention=true` selects the canonical
+  attention-state set without introducing a new lifecycle state.
 - `GET /v1/operator/operations/{operation_id}` reconstructs intent, policy,
   approval, attempts, provider evidence, verification, compensation, audit,
   and currently available actions.

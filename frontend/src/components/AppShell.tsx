@@ -7,9 +7,14 @@ interface AppShellProps {
   onLogout: () => void;
 }
 
-const LINKS = [
+const PRIMARY_LINKS = [
+  { href: "/", label: "Overview" },
   { href: "/operations", label: "Operations" },
   { href: "/approvals", label: "Approvals" },
+  { href: "/providers", label: "Providers" },
+] as const;
+
+const SECONDARY_LINKS = [
   { href: "/recovery", label: "Recovery" },
 ] as const;
 
@@ -65,7 +70,18 @@ export function AppShell({ children, currentPath, onNavigate, onLogout }: AppShe
       <aside ref={navigation} id="operator-navigation" className="app-navigation" aria-label="Stateback operator">
         <p className="app-navigation__brand" aria-label="Stateback">STATEBACK</p>
         <nav aria-label="Operator navigation">
-          {LINKS.map(({ href, label }) => (
+          {PRIMARY_LINKS.map(({ href, label }) => (
+            <a
+              key={href}
+              href={href}
+              aria-current={href === "/" ? currentPath === "/" ? "page" : undefined : currentPath === href || currentPath.startsWith(`${href}/`) ? "page" : undefined}
+              onClick={(event) => follow(event, href)}
+            >
+              {label}
+            </a>
+          ))}
+          <p className="app-navigation__group-label">Operations</p>
+          {SECONDARY_LINKS.map(({ href, label }) => (
             <a
               key={href}
               href={href}

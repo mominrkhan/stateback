@@ -9,7 +9,7 @@ import { AdvisorySummary } from "./AdvisorySummary";
 
 function operation(version = 2, id = "00000000-0000-4000-8000-000000000001"): Operation { const base = parseOperationPage(listFixture).items[0]; return { ...base, version, operation_id: id }; }
 function semantic(overrides: Partial<SemanticSummary> = {}): SemanticSummary { return { ...parseSemanticSummary(unavailableFixture), ...overrides }; }
-function client(summary: (id: string, signal?: AbortSignal) => Promise<SemanticSummary>): OperatorClient { return { list: vi.fn(), reconstruct: vi.fn(), command: vi.fn(), semanticSummary: vi.fn(summary) }; }
+function client(summary: (id: string, signal?: AbortSignal) => Promise<SemanticSummary>): OperatorClient { return { overview: vi.fn(), list: vi.fn(), reconstruct: vi.fn(), command: vi.fn(), semanticSummary: vi.fn(summary) }; }
 function deferred<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>((done) => { resolve = done; }); return { promise, resolve }; }
 
 describe("AdvisorySummary", () => {

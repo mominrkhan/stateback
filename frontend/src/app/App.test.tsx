@@ -11,18 +11,25 @@ function login(token = " opaque token ") {
 
 beforeEach(() => {
   window.history.replaceState(null, "", "/");
-  vi.stubGlobal("fetch", vi.fn().mockResolvedValue(
-    new Response("{}", { status: 200, headers: { "Content-Type": "application/json" } }),
-  ));
+  vi.stubGlobal("fetch", vi.fn().mockImplementation((input: RequestInfo | URL) => {
+    const url = String(input);
+    const body = url.includes("/overview") ? {
+      contract_version: "v1", total_operations: 0,
+      attention: { awaiting_approval: 0, unknown: 0, manual_intervention: 0, compensation_issues: 0 },
+      active: { executing: 0, verifying: 0, compensating: 0 }, recent_operations: [],
+      providers: [{ provider: "github", configured: false, supported_effects: [{ provider: "github", action: "create_issue", version: "v1" }] }],
+    } : { contract_version: "v1", items: [], next_cursor: null };
+    return Promise.resolve(new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } }));
+  }));
 });
 
-test("root canonicalizes with replaceState after access and focuses operations", async () => {
+test("root remains overview after access and focuses its heading", async () => {
   const replace = vi.spyOn(window.history, "replaceState");
   renderWithSession(<App />);
   login();
-  const heading = await screen.findByRole("heading", { name: "Operations" });
-  await waitFor(() => expect(window.location.pathname).toBe("/operations"));
-  expect(replace).toHaveBeenCalledWith(null, "", "/operations");
+  const heading = await screen.findByRole("heading", { name: "Overview", level: 1 });
+  await waitFor(() => expect(window.location.pathname).toBe("/"));
+  expect(replace).not.toHaveBeenCalledWith(null, "", "/operations");
   expect(heading).toHaveFocus();
 });
 

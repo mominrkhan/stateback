@@ -31,6 +31,7 @@ from stateback.domain.enums import ApprovalState, OperationState, VerificationMo
 from stateback.domain.ids import OpaqueId
 from stateback.domain.operation import Operation
 from stateback.domain.policy import Approval, PolicyDecision
+from stateback.domain.refs import EffectRef
 from stateback.domain.secrets import key_is_forbidden, value_is_forbidden
 from stateback.domain.verification import VerificationRequest, VerificationResult
 from stateback.persistence.types import StoredReconciliationDecision
@@ -78,6 +79,54 @@ class OperationPage:
             "items": [operation.to_wire() for operation in self.operations],
             "next_cursor": self.next_cursor,
         }
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class ProviderOverview:
+    provider: str
+    configured: bool
+    supported_effects: tuple[EffectRef, ...]
+
+    def to_wire(self) -> dict[str, object]:
+        return {
+            "provider": self.provider,
+            "configured": self.configured,
+            "supported_effects": [
+                effect.to_wire() for effect in self.supported_effects
+            ],
+        }
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class OperatorOverview:
+    total_operations: int
+    attention: dict[str, int]
+    active: dict[str, int]
+    recent_operations: tuple[Operation, ...]
+    providers: tuple[ProviderOverview, ...]
+
+    def to_wire(self) -> dict[str, object]:
+        return {
+            "contract_version": "v1",
+            "total_operations": self.total_operations,
+            "attention": self.attention,
+            "active": self.active,
+            "recent_operations": [
+                operation.to_wire() for operation in self.recent_operations
+            ],
+            "providers": [provider.to_wire() for provider in self.providers],
+        }
+
+
+_ATTENTION_STATES = frozenset(
+    {
+        OperationState.AWAITING_APPROVAL,
+        OperationState.UNKNOWN,
+        OperationState.MANUAL_INTERVENTION,
+        OperationState.COMPENSATION_UNKNOWN,
+        OperationState.COMPENSATION_FAILED,
+    }
+)
 
 
 def _reconciliation_wire(stored: StoredReconciliationDecision) -> dict[str, object]:
@@ -201,6 +250,7 @@ class ApplicationService:
         compensation: CompensationService | None = None,
         registry: CapabilityRegistry | None = None,
         semantic_summaries: AuditSummaryService | None = None,
+        configured_providers: frozenset[str] = frozenset(),
     ) -> None:
         self._factory = session_factory
         self._runtime = runtime
@@ -209,6 +259,7 @@ class ApplicationService:
         self._compensation = compensation
         self._registry = registry
         self._semantic_summaries = semantic_summaries
+        self._configured_providers = configured_providers
 
     def _available_actions(
         self,
@@ -354,8 +405,16 @@ class ApplicationService:
         self, identity: AuthenticatedIdentity, query: OperationSearch
     ) -> OperationPage:
         identity.require(Role.OPERATOR)
+        if query.attention and query.state is not None:
+            raise ApplicationServiceError("invalid_filter_combination")
         with unit_of_work(self._factory) as uow:
             operations = uow.operations.list_all()
+        if query.attention:
+            operations = [
+                operation
+                for operation in operations
+                if operation.state in _ATTENTION_STATES
+            ]
         if query.state is not None:
             try:
                 state = OperationState(query.state)
@@ -398,6 +457,47 @@ class ApplicationService:
         selected = operations[: query.limit]
         next_value = _cursor(selected[-1]) if len(operations) > query.limit else None
         return OperationPage(operations=tuple(selected), next_cursor=next_value)
+
+    def operator_overview(self, identity: AuthenticatedIdentity) -> OperatorOverview:
+        identity.require(Role.OPERATOR)
+        with unit_of_work(self._factory) as uow:
+            operations = uow.operations.list_all()
+
+        counts = {state: 0 for state in OperationState}
+        for operation in operations:
+            counts[operation.state] += 1
+
+        effects_by_provider: dict[str, list[EffectRef]] = {}
+        if self._registry is not None:
+            for effect in self._registry.listed_effects():
+                effects_by_provider.setdefault(effect.provider, []).append(effect)
+        providers = tuple(
+            ProviderOverview(
+                provider=provider,
+                configured=provider in self._configured_providers,
+                supported_effects=tuple(effects),
+            )
+            for provider, effects in effects_by_provider.items()
+        )
+        return OperatorOverview(
+            total_operations=len(operations),
+            attention={
+                "awaiting_approval": counts[OperationState.AWAITING_APPROVAL],
+                "unknown": counts[OperationState.UNKNOWN],
+                "manual_intervention": counts[OperationState.MANUAL_INTERVENTION],
+                "compensation_issues": (
+                    counts[OperationState.COMPENSATION_UNKNOWN]
+                    + counts[OperationState.COMPENSATION_FAILED]
+                ),
+            },
+            active={
+                "executing": counts[OperationState.EXECUTING],
+                "verifying": counts[OperationState.VERIFYING],
+                "compensating": counts[OperationState.COMPENSATING],
+            },
+            recent_operations=tuple(operations[:8]),
+            providers=providers,
+        )
 
     def reconstruct(
         self, identity: AuthenticatedIdentity, operation_id: OpaqueId

@@ -1,7 +1,7 @@
 import { ParseFailure } from "./errors";
 import type {
   Approval, AuditEvent, Compensation, CompensationAttempt, ExecutionAttempt, JsonValue,
-  NormalizedError, Operation, OperationPage, PolicyDecision, PrincipalRef, ProviderEvidence,
+  NormalizedError, Operation, OperationPage, OperatorOverview, PolicyDecision, PrincipalRef, ProviderEvidence,
   Reconstruction, Reconciliation, SemanticStatus, SemanticSummary,
   VerificationOutcome, VerificationRecord, VerificationRequest, VerificationResult,
 } from "./types";
@@ -86,6 +86,39 @@ export function parseOperation(value: unknown, path = "operation"): Operation {
 
 export function parseOperationPage(value: unknown): OperationPage {
   const raw = object(value, "list"); return { contract_version: version(raw, "list"), items: array(get(raw, "items", "list"), "list.items").map((item, i) => parseOperation(item, `list.items[${i}]`)), next_cursor: nullableStr(get(raw, "next_cursor", "list"), "list.next_cursor") };
+}
+
+export function parseOperatorOverview(value: unknown): OperatorOverview {
+  const raw = object(value, "overview");
+  const attention = object(get(raw, "attention", "overview"), "overview.attention");
+  const active = object(get(raw, "active", "overview"), "overview.active");
+  return {
+    contract_version: version(raw, "overview"),
+    total_operations: integer(get(raw, "total_operations", "overview"), "overview.total_operations"),
+    attention: {
+      awaiting_approval: integer(get(attention, "awaiting_approval", "overview.attention"), "overview.attention.awaiting_approval"),
+      unknown: integer(get(attention, "unknown", "overview.attention"), "overview.attention.unknown"),
+      manual_intervention: integer(get(attention, "manual_intervention", "overview.attention"), "overview.attention.manual_intervention"),
+      compensation_issues: integer(get(attention, "compensation_issues", "overview.attention"), "overview.attention.compensation_issues"),
+    },
+    active: {
+      executing: integer(get(active, "executing", "overview.active"), "overview.active.executing"),
+      verifying: integer(get(active, "verifying", "overview.active"), "overview.active.verifying"),
+      compensating: integer(get(active, "compensating", "overview.active"), "overview.active.compensating"),
+    },
+    recent_operations: array(get(raw, "recent_operations", "overview"), "overview.recent_operations")
+      .map((item, index) => parseOperation(item, `overview.recent_operations[${index}]`)),
+    providers: array(get(raw, "providers", "overview"), "overview.providers").map((item, index) => {
+      const path = `overview.providers[${index}]`;
+      const provider = object(item, path);
+      return {
+        provider: str(get(provider, "provider", path), `${path}.provider`),
+        configured: bool(get(provider, "configured", path), `${path}.configured`),
+        supported_effects: array(get(provider, "supported_effects", path), `${path}.supported_effects`)
+          .map((supported, effectIndex) => effect(supported, `${path}.supported_effects[${effectIndex}]`)),
+      };
+    }),
+  };
 }
 function policy(value: unknown, path: string): PolicyDecision {
   const raw = object(value, path); const obligations = object(get(raw, "obligations", path), `${path}.obligations`);

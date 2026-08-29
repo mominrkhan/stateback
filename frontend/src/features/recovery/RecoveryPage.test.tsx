@@ -28,6 +28,7 @@ function makeClient(options: {
   const afterCommand = options.afterCommand ?? { ...selected, operation: { ...selected.operation, version: selected.operation.version + 1 }, available_actions: [] };
   let reconstructionCalls = 0;
   return {
+    overview: vi.fn(),
     list: vi.fn(async (filters?: OperationFilters) => ({ contract_version: "v1" as const, items: operations[filters?.state ?? ""] ?? [], next_cursor: null })),
     reconstruct: vi.fn(async () => ++reconstructionCalls === 1 ? selected : afterCommand),
     command: vi.fn(async () => afterCommand.operation),
@@ -110,7 +111,7 @@ test("submits verification through the command controller and reloads authoritat
   }));
   await screen.findByText("Authoritative reconstruction reloaded.");
   expect(client.reconstruct).toHaveBeenCalledTimes(2);
-  expect(screen.getByText("VERIFYING")).toBeVisible();
+  expect(screen.getByText("Verifying external outcome")).toBeVisible();
   expect(registry.get(item.operation_id)).toBeUndefined();
 });
 

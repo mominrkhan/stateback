@@ -65,8 +65,8 @@ async function navigateInSession(page: Page, path: string) {
 }
 
 async function openApproval(page: Page) {
-  await page.getByRole("link", { name: /github \/ create_issue \/ v1/i }).click();
-  await expect(page.getByRole("heading", { name: "Approval review" })).toBeVisible();
+  await page.getByRole("link", { name: /create issue with github/i }).click();
+  await expect(page.getByRole("heading", { name: "Create issue" })).toBeVisible();
 }
 
 async function submitDetailCommand(page: Page, state: ApiScenario) {
@@ -78,7 +78,7 @@ async function submitDetailCommand(page: Page, state: ApiScenario) {
   await expect.poll(() => state.commandRequests.length).toBe(1);
 }
 
-test("authentication canonicalizes root, keeps credentials memory-only, and logout purges UI", async ({ page }) => {
+test("manual authentication keeps production credentials memory-only and root is Overview", async ({ page }) => {
   const state = scenario();
   await installApi(page, state);
   await page.goto("/");
@@ -86,9 +86,9 @@ test("authentication canonicalizes root, keeps credentials memory-only, and logo
   await page.getByLabel("Access token").fill("browser-test-token");
   await page.getByRole("button", { name: "Sign in" }).click();
 
-  await expect(page).toHaveURL(/\/operations$/);
-  await expect(page.getByRole("heading", { name: "Operations", level: 1 })).toBeFocused();
-  await expect(page.getByText(FIRST_ID)).toBeVisible();
+  await expect(page).toHaveURL(/\/$/);
+  await expect(page.getByRole("heading", { name: "Overview", level: 1 })).toBeFocused();
+  await expect(page.getByRole("heading", { name: "Needs attention" })).toBeVisible();
   expect(await page.evaluate(() => ({ local: localStorage.length, session: sessionStorage.length, html: document.documentElement.innerHTML }))).toEqual({
     local: 0,
     session: 0,
@@ -104,7 +104,7 @@ test("authentication canonicalizes root, keeps credentials memory-only, and logo
 test("a 401 clears the session and returns focus to access", async ({ page }) => {
   const state = scenario();
   await installApi(page, state);
-  await login(page);
+  await login(page, "/operations");
   await expect(page.getByText(FIRST_ID)).toBeVisible();
   state.unauthorizedList = true;
   await page.getByRole("button", { name: "Apply filters" }).click();
@@ -115,10 +115,29 @@ test("a 401 clears the session and returns focus to access", async ({ page }) =>
   expect(await page.evaluate(() => localStorage.length + sessionStorage.length)).toBe(0);
 });
 
+test("local bootstrap survives same-tab refresh and clears on logout", async ({ page }) => {
+  const state = scenario();
+  await installApi(page, state);
+  const token = "a".repeat(43);
+  await page.goto(`/#stateback-bootstrap=${token}`);
+  await expect(page.getByRole("heading", { name: "Overview", level: 1 })).toBeFocused();
+  await expect(page).toHaveURL(/\/$/);
+  expect(await page.evaluate(() => ({ local: localStorage.length, session: sessionStorage.length }))).toEqual({ local: 0, session: 1 });
+  await page.reload();
+  await expect(page.getByRole("heading", { name: "Overview", level: 1 })).toBeVisible();
+  await page.getByRole("button", { name: "Log out" }).click();
+  expect(await page.evaluate(() => sessionStorage.length)).toBe(0);
+});
+
 test("operations preserve exact filters, backend order, cursor history, and detail navigation", async ({ page }) => {
   const state = scenario();
   await installApi(page, state);
-  await login(page);
+  await login(page, "/operations");
+
+  await page.getByRole("combobox", { name: "State", exact: true }).selectOption("NEEDS_ATTENTION");
+  await page.getByRole("button", { name: "Apply filters" }).click();
+  await expect.poll(() => state.listQueries.at(-1)).toContain("attention=true");
+  await expect(page).toHaveURL(/\/operations\?attention=true&limit=50$/);
 
   await page.getByRole("combobox", { name: "State", exact: true }).selectOption("UNKNOWN");
   await page.getByLabel("Provider (exact)").fill("github");
@@ -144,9 +163,9 @@ test("operations preserve exact filters, backend order, cursor history, and deta
   await page.getByRole("button", { name: "Previous" }).click();
   await expect(page.getByText(FIRST_ID)).toBeVisible();
 
-  await page.getByRole("link", { name: /github.*create issue/i }).click();
+  await page.getByRole("link", { name: /create issue/i }).click();
   await expect(page).toHaveURL(new RegExp(`/operations/${FIRST_ID}$`));
-  await expect(page.getByRole("heading", { name: "Operation detail", level: 1 })).toBeFocused();
+  await expect(page.getByRole("heading", { name: "Create issue with GitHub", level: 1 })).toBeFocused();
   for (const heading of ["Summary", "Execution attempts", "Evidence", "Verification and reconciliation", "Compensation", "Durable audit"]) {
     await expect(page.getByRole("heading", { name: heading, exact: true })).toBeVisible();
   }
@@ -157,7 +176,7 @@ test("approval dialog is keyboard-safe and submits the exact binding", async ({ 
   await installApi(page, state);
   await login(page, "/approvals");
   await openApproval(page);
-  const trigger = page.getByRole("button", { name: "Approve operation" });
+  const trigger = page.getByRole("button", { name: "Approve create issue" });
   await page.getByLabel("Operator reason").fill("reviewed immutable binding");
   await trigger.focus();
   await page.keyboard.press("Enter");
@@ -167,7 +186,7 @@ test("approval dialog is keyboard-safe and submits the exact binding", async ({ 
   await expect(dialog).toBeHidden();
   await expect(trigger).toBeFocused();
 
-  await page.getByRole("button", { name: "Reject operation" }).click();
+  await page.getByRole("button", { name: "Reject create issue" }).click();
   await expect(page.getByRole("heading", { name: "Confirm rejection" })).toBeFocused();
   await expectAxeClean(page);
   await page.keyboard.press("Escape");
@@ -177,7 +196,7 @@ test("approval dialog is keyboard-safe and submits the exact binding", async ({ 
   dialog = page.getByRole("dialog");
   await expect(dialog).toContainText(FIRST_ID);
   await expect(dialog).toContainText("reviewed immutable binding");
-  await dialog.getByRole("button", { name: "Confirm approval" }).click();
+  await dialog.getByRole("button", { name: "Approve create issue" }).click();
   await expect.poll(() => state.commandRequests.length).toBe(1);
   expect(JSON.parse(state.commandRequests[0].body ?? "{}")).toMatchObject({
     expected_version: 3,
@@ -192,7 +211,7 @@ test("approval dialog passes automated accessibility checks", async ({ page }) =
   await login(page, "/approvals");
   await openApproval(page);
   await page.getByLabel("Operator reason").fill("accessibility review");
-  await page.getByRole("button", { name: "Approve operation" }).click();
+  await page.getByRole("button", { name: "Approve create issue" }).click();
   await expectAxeClean(page);
 });
 
@@ -202,20 +221,20 @@ test("approval conflict reloads authoritative state without losing the reason", 
   await login(page, "/approvals");
   await openApproval(page);
   await page.getByLabel("Operator reason").fill("keep this reason");
-  await page.getByRole("button", { name: "Approve operation" }).click();
-  await page.getByRole("dialog").getByRole("button", { name: "Confirm approval" }).click();
+  await page.getByRole("button", { name: "Approve create issue" }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "Approve create issue" }).click();
 
   await expect(page.getByText(/approval changed on the server/i)).toBeVisible();
   await expectAxeClean(page);
   await expect(page.getByLabel("Operator reason")).toHaveValue("keep this reason");
   await expect.poll(() => state.reconstructionReads).toBeGreaterThanOrEqual(2);
-  await expect(page.getByRole("button", { name: "Approve operation" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Approve create issue" })).toBeVisible();
 });
 
 test("read failure has an accessible retry and recovers", async ({ page }) => {
   const state = scenario();
   await installApi(page, state);
-  await login(page);
+  await login(page, "/operations");
   await expect(page.getByText(FIRST_ID)).toBeVisible();
   state.listError = 503;
   await page.getByRole("button", { name: "Apply filters" }).click();
@@ -279,11 +298,11 @@ test("mobile drawer traps focus, restores it, and route changes reset document s
     await page.setViewportSize({ width, height: 800 });
     const menu = page.getByRole("button", { name: "Menu" });
     await menu.click();
-    await expect(page.getByRole("link", { name: "Operations", exact: true })).toBeFocused();
+    await expect(page.getByRole("link", { name: "Overview", exact: true })).toBeFocused();
     await page.keyboard.press("Shift+Tab");
     await expect(page.getByRole("link", { name: "Recovery", exact: true })).toBeFocused();
     await page.keyboard.press("Tab");
-    await expect(page.getByRole("link", { name: "Operations", exact: true })).toBeFocused();
+    await expect(page.getByRole("link", { name: "Overview", exact: true })).toBeFocused();
     await page.keyboard.press("Escape");
     await expect(menu).toBeFocused();
   }
@@ -311,7 +330,7 @@ test("direct entry, refresh, Back, Forward, and not-found routing remain accessi
 test("a response from the previous logged-out session cannot repopulate operator data", async ({ page }) => {
   const state = scenario();
   await installApi(page, state);
-  await login(page);
+  await login(page, "/operations");
   await expect(page.getByText(FIRST_ID)).toBeVisible();
 
   let release!: () => void;
@@ -367,32 +386,45 @@ test("all routes and supported viewport sizes retain essential operator data", a
   await installApi(page, state);
   await login(page);
   await expectAxeClean(page);
+  if (process.env.STATEBACK_VISUAL_EVIDENCE === "1") {
+    await page.setViewportSize({ width: 1440, height: 900 });
+  }
 
   const routes = [
+    ["Overview", "Overview"],
     ["Operations", "Operations"],
     ["Approvals", "Approvals"],
+    ["Providers", "Providers"],
     ["Recovery", "Recovery"],
   ] as const;
   for (const [link, heading] of routes) {
     await page.getByRole("link", { name: link, exact: true }).click();
     await expect(page.getByRole("heading", { name: heading, level: 1 })).toBeVisible();
     await expectAxeClean(page);
+    if (process.env.STATEBACK_VISUAL_EVIDENCE === "1") {
+      const body = await page.screenshot({ fullPage: true });
+      await testInfo.attach(`route-${link.toLocaleLowerCase()}`, { body, contentType: "image/png" });
+    }
   }
   await page.getByRole("link", { name: "Operations", exact: true }).click();
-  await page.getByRole("link", { name: /github.*create issue/i }).click();
-  await expect(page.getByRole("heading", { name: "Operation detail", level: 1 })).toBeVisible();
+  await page.getByRole("link", { name: /create issue/i }).click();
+  await expect(page.getByRole("heading", { name: "Create issue with GitHub", level: 1 })).toBeVisible();
   await page.getByRole("navigation", { name: "Operation detail sections" }).getByRole("link", { name: "Audit" }).click();
   await expect(page).toHaveURL(/#audit-heading$/);
   await expectAxeClean(page);
+  if (process.env.STATEBACK_VISUAL_EVIDENCE === "1") {
+    const body = await page.screenshot({ fullPage: true });
+    await testInfo.attach("operation-detail", { body, contentType: "image/png" });
+  }
 
   for (const width of [1440, 1024, 768, 390, 320]) {
     await page.setViewportSize({ width, height: width === 1440 ? 1024 : 800 });
     await navigateInSession(page, "/operations");
     const row = page.locator(".operation-table tbody tr").first();
     await expect(row.getByText(FIRST_ID)).toBeVisible();
-    await expect(row.getByText("UNKNOWN", { exact: true })).toBeVisible();
-    await expect(row.getByRole("link", { name: /github.*create issue/i })).toBeVisible();
-    await expect(row.getByText("2026-08-20T12:00:00.000Z UTC")).toBeVisible();
+    await expect(row.getByText("Outcome unknown", { exact: true })).toBeVisible();
+    await expect(row.getByRole("link", { name: /create issue/i })).toBeVisible();
+    await expect(row.locator("time")).toHaveAttribute("title", "2026-08-20T12:00:00.000Z UTC");
     await expect(row.getByRole("button", { name: new RegExp(`Copy operation ID ${FIRST_ID}`) })).toBeVisible();
     if (width <= 390) {
       for (const cell of await row.locator("td").all()) await expectInsideViewport(cell, page, false);
@@ -410,10 +442,9 @@ test("all routes and supported viewport sizes retain essential operator data", a
   for (const width of [390, 320]) {
     await page.setViewportSize({ width, height: 800 });
     await navigateInSession(page, `/operations/${MANUAL_ID}`);
-    await expect(page.getByRole("heading", { name: "Operation detail", level: 1 })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Create issue with GitHub", level: 1 })).toBeVisible();
     await expectInsideViewport(page.locator(".operation-detail__critical-state"), page);
-    await expectInsideViewport(page.locator(".operation-detail__critical-id"), page);
-    await expectInsideViewport(page.locator(".operation-detail__critical-basis"), page);
+    await expectInsideViewport(page.getByText("Technical details"), page);
     await expectInsideViewport(page.getByRole("button", { name: "Request verification" }), page);
     await page.getByRole("button", { name: "Request verification" }).click();
     await page.getByLabel("Operator reason").fill("mobile command review");

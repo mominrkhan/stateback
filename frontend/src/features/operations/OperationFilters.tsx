@@ -2,9 +2,11 @@ import { useEffect, useState, type FormEvent } from "react";
 
 import { OPERATION_STATES } from "../../api/types";
 import type { OperationFilters as ApiOperationFilters } from "../../api/query";
+import { operationStateLabel } from "../../presentation/labels";
 
 export interface OperationsFilterValues {
   state?: string;
+  attention?: boolean;
   provider?: string;
   createdFrom?: string;
   createdTo?: string;
@@ -25,12 +27,15 @@ function validUtc(value: string): boolean {
 export function parseOperationsSearch(search: string): ParsedOperationsSearch {
   const query = new URLSearchParams(search);
   const state = query.get("state");
+  const attention = query.get("attention");
   const provider = query.get("provider");
   const createdFrom = query.get("created_from");
   const createdTo = query.get("created_to");
   const rawLimit = query.get("limit");
   const limit = rawLimit === null ? DEFAULT_LIMIT : Number(rawLimit);
   const invalid = (state !== null && !(OPERATION_STATES as readonly string[]).includes(state))
+    || (attention !== null && attention !== "true")
+    || (state !== null && attention !== null)
     || (provider !== null && (provider.length === 0 || provider.length > 100))
     || (createdFrom !== null && !validUtc(createdFrom))
     || (createdTo !== null && !validUtc(createdTo))
@@ -40,6 +45,7 @@ export function parseOperationsSearch(search: string): ParsedOperationsSearch {
   return {
     filters: {
       ...(state === null ? {} : { state }),
+      ...(attention === "true" ? { attention: true } : {}),
       ...(provider === null ? {} : { provider }),
       ...(createdFrom === null ? {} : { createdFrom }),
       ...(createdTo === null ? {} : { createdTo }),
@@ -52,6 +58,7 @@ export function parseOperationsSearch(search: string): ParsedOperationsSearch {
 export function serializeOperationsFilters(filters: OperationsFilterValues): string {
   const query = new URLSearchParams();
   if (filters.state) query.set("state", filters.state);
+  if (filters.attention) query.set("attention", "true");
   if (filters.provider) query.set("provider", filters.provider);
   if (filters.createdFrom) query.set("created_from", filters.createdFrom);
   if (filters.createdTo) query.set("created_to", filters.createdTo);
@@ -82,7 +89,7 @@ interface OperationFiltersProps {
 }
 
 export function OperationFilters({ values, invalidSearch = false, onApply, onClear }: OperationFiltersProps) {
-  const [state, setState] = useState(values.state ?? "");
+  const [state, setState] = useState(values.attention ? "NEEDS_ATTENTION" : values.state ?? "");
   const [provider, setProvider] = useState(values.provider ?? "");
   const [createdFrom, setCreatedFrom] = useState(toLocalInput(values.createdFrom));
   const [createdTo, setCreatedTo] = useState(toLocalInput(values.createdTo));
@@ -90,12 +97,12 @@ export function OperationFilters({ values, invalidSearch = false, onApply, onCle
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    setState(values.state ?? "");
+    setState(values.attention ? "NEEDS_ATTENTION" : values.state ?? "");
     setProvider(values.provider ?? "");
     setCreatedFrom(toLocalInput(values.createdFrom));
     setCreatedTo(toLocalInput(values.createdTo));
     setLimit(String(values.limit));
-  }, [values.createdFrom, values.createdTo, values.limit, values.provider, values.state]);
+  }, [values.attention, values.createdFrom, values.createdTo, values.limit, values.provider, values.state]);
 
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -121,7 +128,7 @@ export function OperationFilters({ values, invalidSearch = false, onApply, onCle
     }
     setError(null);
     onApply({
-      ...(state ? { state } : {}),
+      ...(state === "NEEDS_ATTENTION" ? { attention: true } : state ? { state } : {}),
       ...(normalizedProvider ? { provider: normalizedProvider } : {}),
       ...(lower ? { createdFrom: lower } : {}),
       ...(upper ? { createdTo: upper } : {}),
@@ -137,7 +144,8 @@ export function OperationFilters({ values, invalidSearch = false, onApply, onCle
         State
         <select value={state} onChange={(event) => setState(event.currentTarget.value)}>
           <option value="">All states</option>
-          {OPERATION_STATES.map((value) => <option key={value} value={value}>{value.replaceAll("_", " ")}</option>)}
+          <option value="NEEDS_ATTENTION">Needs attention</option>
+          {OPERATION_STATES.map((value) => <option key={value} value={value}>{operationStateLabel(value)}</option>)}
         </select>
       </label>
       <label>

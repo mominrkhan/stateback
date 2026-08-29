@@ -19,6 +19,7 @@ class SubmitOperationRequest:
 @dataclass(frozen=True, slots=True, kw_only=True)
 class OperationSearch:
     state: str | None = None
+    attention: bool = False
     provider: str | None = None
     created_from: str | None = None
     created_to: str | None = None

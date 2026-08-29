@@ -1,6 +1,7 @@
 import { render, screen } from "@testing-library/react";
 
 import { StateBadge, stateGroup } from "./StateBadge";
+import { operationStateLabel } from "../presentation/labels";
 
 const EXPECTED_GROUPS = {
   PENDING_POLICY: "info",
@@ -22,7 +23,7 @@ const EXPECTED_GROUPS = {
 
 test.each(Object.entries(EXPECTED_GROUPS))("renders canonical state %s as %s", (state, group) => {
   render(<StateBadge state={state} />);
-  expect(screen.getByText(state.replaceAll("_", " "))).toHaveClass(`state-badge--${group}`);
+  expect(screen.getByText(operationStateLabel(state)!)).toHaveClass(`state-badge--${group}`);
   expect(stateGroup(state)).toBe(group);
 });
 
@@ -33,6 +34,6 @@ test("preserves a future state as unsupported text", () => {
 
 test("unknown never uses failure treatment", () => {
   render(<StateBadge state="UNKNOWN" />);
-  expect(screen.getByText("UNKNOWN")).toHaveClass("state-badge--unresolved");
-  expect(screen.getByText("UNKNOWN")).not.toHaveClass("state-badge--failure");
+  expect(screen.getByText("Outcome unknown")).toHaveClass("state-badge--unresolved");
+  expect(screen.getByText("Outcome unknown")).not.toHaveClass("state-badge--failure");
 });

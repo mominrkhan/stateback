@@ -3,6 +3,7 @@ export type AppRoute =
   | { name: "operations"; search: string }
   | { name: "operation-detail"; operationId: string }
   | { name: "approvals" }
+  | { name: "providers" }
   | { name: "recovery" }
   | { name: "not-found" };
 
@@ -33,6 +34,7 @@ export function parseRoute(location: Pick<Location, "pathname" | "search">): App
   if (pathname === "/") return { name: "root" };
   if (pathname === "/operations") return { name: "operations", search };
   if (pathname === "/approvals") return { name: "approvals" };
+  if (pathname === "/providers") return { name: "providers" };
   if (pathname === "/recovery") return { name: "recovery" };
 
   const match = /^\/operations\/([^/]*)$/.exec(pathname);
@@ -51,6 +53,8 @@ export function routeKey(route: AppRoute): string {
       return `/operations/${encodeURIComponent(route.operationId)}`;
     case "approvals":
       return "/approvals";
+    case "providers":
+      return "/providers";
     case "recovery":
       return "/recovery";
     case "root":

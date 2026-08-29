@@ -24,10 +24,12 @@ from stateback.domain.enums import (
     PolicyVerdict,
     PrincipalType,
 )
+from stateback.domain.ids import OpaqueId
 from stateback.domain.jsonutil import json_from_plain
 from stateback.domain.policy import PolicyObligations
 from stateback.domain.refs import PrincipalRef
 from stateback.mcp import StatebackMcpTools
+from stateback.persistence.uow import unit_of_work
 from stateback.policy import PHASE5_DEFAULT_OBLIGATIONS, PolicyRule, RulePolicyEngine
 from stateback.providers.reference.adapter import ReferenceAdapter
 from stateback.providers.reference.clock import FixedClock
@@ -40,6 +42,7 @@ from stateback.semantic import (
     DeterministicSemanticModel,
     SemanticStatus,
 )
+from tests.integration.persistence.conftest import make_operation as persisted_operation
 from tests.integration.runtime.conftest import make_submit, rebuild_runtime
 from tests.integration.runtime.idseq import IdSeq, execute_ids
 from tests.unit.domain.fixtures import REQUESTER
@@ -344,6 +347,75 @@ def test_operator_search_cursor_is_stable_and_non_overlapping(
     assert second.next_cursor is None
     observed = {item.operation_id for item in first.operations + second.operations}
     assert observed == created
+
+
+def test_operator_overview_and_attention_filter_use_authoritative_states(
+    uow_factory: sessionmaker[Session],
+    runtime: SynchronousRuntime,
+    registry: CapabilityRegistry,
+) -> None:
+    states = (
+        OperationState.AWAITING_APPROVAL,
+        OperationState.UNKNOWN,
+        OperationState.MANUAL_INTERVENTION,
+        OperationState.COMPENSATION_UNKNOWN,
+        OperationState.COMPENSATION_FAILED,
+        OperationState.EXECUTING,
+        OperationState.VERIFYING,
+        OperationState.COMPENSATING,
+        OperationState.SUCCEEDED,
+    )
+    with unit_of_work(uow_factory) as uow:
+        for index, state in enumerate(states, start=20):
+            uow.operations.insert(
+                persisted_operation(
+                    operation_id=OpaqueId.from_wire(
+                        f"00000000-0000-4000-8000-{index:012d}"
+                    ),
+                    state=state,
+                )
+            )
+        uow.commit()
+
+    service = ApplicationService(
+        session_factory=uow_factory,
+        runtime=runtime,
+        registry=registry,
+        configured_providers=frozenset({"reference"}),
+    )
+    overview = service.operator_overview(OPERATOR)
+    assert overview.total_operations == len(states)
+    assert overview.attention == {
+        "awaiting_approval": 1,
+        "unknown": 1,
+        "manual_intervention": 1,
+        "compensation_issues": 2,
+    }
+    assert overview.active == {"executing": 1, "verifying": 1, "compensating": 1}
+    assert len(overview.recent_operations) == 8
+    assert overview.providers
+    assert overview.providers[0].configured is True
+    assert "credential" not in json.dumps(overview.to_wire()).lower()
+
+    attention = service.search_operations(
+        OPERATOR, OperationSearch(attention=True, limit=50)
+    )
+    assert {operation.state for operation in attention.operations} == {
+        OperationState.AWAITING_APPROVAL,
+        OperationState.UNKNOWN,
+        OperationState.MANUAL_INTERVENTION,
+        OperationState.COMPENSATION_UNKNOWN,
+        OperationState.COMPENSATION_FAILED,
+    }
+    with pytest.raises(ApplicationServiceError, match="invalid_filter_combination"):
+        service.search_operations(
+            OPERATOR,
+            OperationSearch(
+                state=OperationState.UNKNOWN.value, attention=True, limit=50
+            ),
+        )
+    with pytest.raises(AuthorizationError, match="insufficient_role"):
+        service.operator_overview(CALLER)
 
 
 def test_operator_approval_is_authorized_bound_and_idempotent(

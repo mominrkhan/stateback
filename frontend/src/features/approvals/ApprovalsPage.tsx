@@ -169,21 +169,21 @@ export function ApprovalsPage({
   return (
     <div className="approvals-page">
       <header className="page-header">
-        <p className="eyebrow">DELIBERATE DECISIONS</p>
+        <p className="eyebrow">DECISION QUEUE</p>
         <h1 id="approvals-page-heading" data-page-heading tabIndex={-1}>Approvals</h1>
-        <p>Select one operation to load its authoritative approval binding.</p>
+        <p>Review exactly what an agent is asking to do before authorizing it.</p>
       </header>
       {queueLoading && operations.length === 0 ? (
         <DefensiveState kind="loading" title="Loading approval queue" />
       ) : queueError ? (
         <DefensiveState kind="error" title="Unable to load approvals" onRetry={() => void loadQueue(cursor)}><p>{queueError}</p></DefensiveState>
       ) : operations.length === 0 && !detail ? (
-        <DefensiveState kind="empty" title="No approvals awaiting a decision" />
+        <DefensiveState kind="empty" title="No approvals waiting"><p>There are no agent actions awaiting your approval.</p></DefensiveState>
       ) : (
         <div className="approvals-layout">
           <div>
             {queueLoading && <p role="status">Loading approval page…</p>}
-            {operations.length === 0 ? <DefensiveState kind="empty" title="No approvals awaiting a decision" /> : (
+            {operations.length === 0 ? <DefensiveState kind="empty" title="No approvals waiting"><p>There are no agent actions awaiting your approval.</p></DefensiveState> : (
               <>
                 <ApprovalQueue operations={operations} selectedOperationId={selectedId} disabled={detailLoading} onSelect={(operation) => void select(operation)} />
                 <nav className="operation-pagination" aria-label="Approval queue pagination">

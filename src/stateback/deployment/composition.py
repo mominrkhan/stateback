@@ -76,16 +76,16 @@ def build_services(*, require_auth: bool, execute_providers: bool) -> Services:
             allowed_principals=frozenset()
         )
     registry = CapabilityRegistry()
-    github = (
-        GitHubAdapter.from_token(
-            token=read_secret_file("STATEBACK_GITHUB_TOKEN_FILE"), clock=clock
-        )
-        if execute_providers
-        else GitHubAdapter.for_validation(
-            credential_configured=boolean_env("STATEBACK_GITHUB_CONFIGURED"),
+    if execute_providers:
+        github_token = read_secret_file("STATEBACK_GITHUB_TOKEN_FILE")
+        github_configured = github_token is not None and bool(github_token.strip())
+        github = GitHubAdapter.from_token(token=github_token, clock=clock)
+    else:
+        github_configured = boolean_env("STATEBACK_GITHUB_CONFIGURED")
+        github = GitHubAdapter.for_validation(
+            credential_configured=github_configured,
             clock=clock,
         )
-    )
     registry.register(github)
     runtime = SynchronousRuntime(
         session_factory=factory,
@@ -110,6 +110,9 @@ def build_services(*, require_auth: bool, execute_providers: bool) -> Services:
         compensation=compensation,
         registry=registry,
         semantic_summaries=_semantic_service(),
+        configured_providers=(
+            frozenset({"github"}) if github_configured else frozenset()
+        ),
     )
     return Services(
         session_factory=factory,

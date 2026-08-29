@@ -23,6 +23,7 @@ function operation(id: string, state = "UNKNOWN"): Operation {
 
 function clientWithList(list: OperatorClient["list"]): OperatorClient {
   return {
+    overview: vi.fn(),
     list,
     reconstruct: vi.fn(),
     semanticSummary: vi.fn(),
@@ -68,7 +69,10 @@ test("uses opaque next cursor and client-only previous history", async () => {
 test("filter navigation is deterministic and separate from exact-ID navigation", async () => {
   const navigate = vi.fn();
   render(<OperationsPage client={clientWithList(vi.fn().mockResolvedValue(page([])))} search="" navigate={navigate} />);
-  await screen.findByText("No operations found");
+  await screen.findByText("No operations yet");
+  fireEvent.change(screen.getByLabelText("State"), { target: { value: "NEEDS_ATTENTION" } });
+  fireEvent.click(screen.getByRole("button", { name: "Apply filters" }));
+  expect(navigate).toHaveBeenCalledWith("/operations?attention=true&limit=50");
   fireEvent.change(screen.getByLabelText("State"), { target: { value: "UNKNOWN" } });
   fireEvent.change(screen.getByLabelText("Provider (exact)"), { target: { value: " github " } });
   fireEvent.change(screen.getByLabelText("Results per page"), { target: { value: "20" } });
@@ -102,6 +106,6 @@ test("renders loading, empty, retryable error, and unsupported URL safely", asyn
   expect(await screen.findByRole("alert")).toHaveTextContent("Unsupported operation filters were ignored.");
   expect(await screen.findByText("Backend unavailable")).toBeVisible();
   fireEvent.click(screen.getByRole("button", { name: "Retry" }));
-  expect(await screen.findByText("No operations found")).toBeVisible();
+  expect(await screen.findByText("No operations match these filters")).toBeVisible();
   expect(list).toHaveBeenLastCalledWith({ limit: 50 }, expect.any(AbortSignal));
 });

@@ -18,9 +18,8 @@ export function stateGroup(state: string): StateGroup {
 
 export function StateBadge({ state }: { state: string }) {
   const group = stateGroup(state);
-  const label = group === "unsupported"
-    ? `Unsupported state: ${state}`
-    : state.replaceAll("_", " ");
+  const label = operationStateLabel(state) ?? `Unsupported state: ${state}`;
 
-  return <span className={`state-badge state-badge--${group}`}>{label}</span>;
+  return <span className={`state-badge state-badge--${group}`} title={group === "unsupported" ? undefined : `Canonical state: ${state}`}>{label}</span>;
 }
+import { operationStateLabel } from "../presentation/labels";

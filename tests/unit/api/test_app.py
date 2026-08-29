@@ -13,7 +13,8 @@ from stateback.application import (
     StaticTokenAuthenticator,
 )
 from stateback.application.auth import AuthenticatedIdentity
-from stateback.application.models import SubmitOperationRequest
+from stateback.application.models import OperationSearch, SubmitOperationRequest
+from stateback.application.service import OperationPage, OperatorOverview
 from stateback.domain.operation import Operation
 from stateback.semantic.models import SemanticStatus, SemanticSummary, empty_summary
 from tests.unit.application.fixtures import IDENTITY, OPERATOR, operation
@@ -31,6 +32,8 @@ class StubService:
         self.operator_actions: list[tuple[str, AuthenticatedIdentity, int, str]] = []
         self.verification_reason: str | None = None
         self.semantic_requests = 0
+        self.overview_reads = 0
+        self.operation_search: OperationSearch | None = None
 
     def submit(
         self,
@@ -67,6 +70,29 @@ class StubService:
             provider=None,
             model=None,
         )
+
+    def operator_overview(self, identity: AuthenticatedIdentity) -> OperatorOverview:
+        identity.require(Role.OPERATOR)
+        self.overview_reads += 1
+        return OperatorOverview(
+            total_operations=0,
+            attention={
+                "awaiting_approval": 0,
+                "unknown": 0,
+                "manual_intervention": 0,
+                "compensation_issues": 0,
+            },
+            active={"executing": 0, "verifying": 0, "compensating": 0},
+            recent_operations=(),
+            providers=(),
+        )
+
+    def search_operations(
+        self, identity: AuthenticatedIdentity, query: OperationSearch
+    ) -> OperationPage:
+        identity.require(Role.OPERATOR)
+        self.operation_search = query
+        return OperationPage(operations=(), next_cursor=None)
 
     def request_verification(
         self,
@@ -239,6 +265,52 @@ def test_read_route_is_read_only(client: TestClient, stub: StubService) -> None:
     assert response.status_code == 200
     assert stub.reads == 1
     assert stub.submits == []
+
+
+def test_operator_overview_is_authenticated_read_only(
+    client: TestClient, stub: StubService
+) -> None:
+    assert client.get("/v1/operator/overview").status_code == 401
+    assert (
+        client.get(
+            "/v1/operator/overview",
+            headers={"Authorization": "Bearer caller-token"},
+        ).status_code
+        == 403
+    )
+    response = client.get(
+        "/v1/operator/overview",
+        headers={"Authorization": "Bearer operator-token"},
+    )
+    assert response.status_code == 200
+    assert response.json() == {
+        "contract_version": "v1",
+        "total_operations": 0,
+        "attention": {
+            "awaiting_approval": 0,
+            "unknown": 0,
+            "manual_intervention": 0,
+            "compensation_issues": 0,
+        },
+        "active": {"executing": 0, "verifying": 0, "compensating": 0},
+        "recent_operations": [],
+        "providers": [],
+    }
+    assert stub.overview_reads == 1
+    assert stub.submits == []
+
+
+def test_operator_attention_filter_reaches_application_boundary(
+    client: TestClient, stub: StubService
+) -> None:
+    response = client.get(
+        "/v1/operator/operations?attention=true&provider=github&limit=25",
+        headers={"Authorization": "Bearer operator-token"},
+    )
+    assert response.status_code == 200
+    assert stub.operation_search == OperationSearch(
+        attention=True, provider="github", limit=25
+    )
 
 
 def test_semantic_summary_uses_operator_application_boundary(

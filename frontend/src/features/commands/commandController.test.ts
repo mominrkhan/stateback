@@ -11,7 +11,7 @@ function reconstruction(actions: string[] = ["verify"], version = 2): Reconstruc
   return { ...base, operation: { ...base.operation, version }, available_actions: actions };
 }
 function client(command: (attempt: CommandAttempt) => Promise<Operation>, reconstruct: () => Promise<Reconstruction>): OperatorClient {
-  return { list: vi.fn(), semanticSummary: vi.fn(), command: vi.fn(command), reconstruct: vi.fn(reconstruct) };
+  return { overview: vi.fn(), list: vi.fn(), semanticSummary: vi.fn(), command: vi.fn(command), reconstruct: vi.fn(reconstruct) };
 }
 function ids(): () => string { let value = 0; return () => `id-${++value}`; }
 

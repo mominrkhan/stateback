@@ -41,6 +41,24 @@ export interface Operation {
 }
 
 export interface OperationPage { contract_version: "v1"; items: Operation[]; next_cursor: string | null }
+export interface ProviderOverview {
+  provider: string;
+  configured: boolean;
+  supported_effects: EffectRef[];
+}
+export interface OperatorOverview {
+  contract_version: "v1";
+  total_operations: number;
+  attention: {
+    awaiting_approval: number;
+    unknown: number;
+    manual_intervention: number;
+    compensation_issues: number;
+  };
+  active: { executing: number; verifying: number; compensating: number };
+  recent_operations: Operation[];
+  providers: ProviderOverview[];
+}
 export interface PolicyObligations {
   require_verification: boolean;
   max_automatic_execution_attempts: number | null;

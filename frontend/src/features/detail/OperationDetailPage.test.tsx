@@ -5,6 +5,7 @@ import type { ProviderEvidence, Reconstruction } from "../../api/types";
 import emptyFixture from "../../test/contract-fixtures/reconstruction-empty-verifications-v1.json";
 import verificationFixture from "../../test/contract-fixtures/reconstruction-verification-v1.json";
 import { OperationDetailPage } from "./OperationDetailPage";
+import { outcomeSummary } from "./OutcomeExplanation";
 
 const base = parseReconstruction(emptyFixture);
 const evidence: ProviderEvidence = {
@@ -182,9 +183,9 @@ test("renders the complete reconstruction hierarchy and integration slots", () =
       advisory={<aside>Advisory summary slot</aside>}
     />,
   );
-  expect(screen.getByRole("heading", { name: "Operation detail" })).toBeVisible();
-  expect(screen.getAllByText("UNKNOWN").find((node) => node.classList.contains("state-badge"))).toHaveClass("state-badge--unresolved");
-  expect(screen.getByText("github / create_issue / v1")).toBeVisible();
+  expect(screen.getByRole("heading", { name: "Create issue with GitHub" })).toBeVisible();
+  expect(screen.getAllByText("Outcome unknown").find((node) => node.classList.contains("state-badge"))).toHaveClass("state-badge--unresolved");
+  expect(screen.getByText("github.create_issue.v1")).toBeInTheDocument();
   expect(screen.getAllByText(/Fixture Agent — AGENT: fixture-agent/)).toHaveLength(2);
   expect(screen.getByText(/2026-08-20T12:05:00.000Z UTC/)).toBeVisible();
   expect(screen.getByRole("button", { name: "Request verification" })).toBeVisible();
@@ -194,17 +195,15 @@ test("renders the complete reconstruction hierarchy and integration slots", () =
   }
 });
 
-test("keeps critical state, full operation ID, reason, action basis, and controls ahead of secondary metadata", () => {
+test("keeps human status and controls ahead of subordinate technical details", () => {
   render(<OperationDetailPage reconstruction={reconstruction} actions={<button type="button">Request verification</button>} />);
   const critical = screen.getByLabelText("Critical operation status and controls");
-  expect(within(critical).getByText("UNKNOWN")).toHaveClass("state-badge--unresolved");
-  expect(within(critical).getByLabelText(`operation ID: ${reconstruction.operation.operation_id}`)).toBeVisible();
-  expect(within(critical).getByRole("button", { name: `Copy operation ID ${reconstruction.operation.operation_id}` })).toBeVisible();
-  expect(within(critical).getByText("approved")).toBeVisible();
-  expect(within(critical).getByText("verify")).toBeVisible();
+  expect(within(critical).getByText("Outcome unknown")).toHaveClass("state-badge--unresolved");
   expect(within(critical).getByRole("button", { name: "Request verification" })).toBeVisible();
   expect(within(critical).queryByText("Requester")).not.toBeInTheDocument();
   expect(screen.getByText("Requester")).toBeVisible();
+  expect(screen.getByText("Technical details")).toBeVisible();
+  expect(screen.getByLabelText(`operation ID: ${reconstruction.operation.operation_id}`)).toBeInTheDocument();
 });
 
 test("shows only the GitHub create-issue approval allowlist and body counts", () => {
@@ -268,7 +267,63 @@ test("omits all arguments for effects without an accepted display policy", () =>
     },
   };
   render(<OperationDetailPage reconstruction={generic} />);
+  expect(screen.getByRole("heading", { name: "Unsupported effect with Unsupported provider" })).toBeVisible();
   expect(screen.queryByRole("heading", { name: "GitHub issue review" })).not.toBeInTheDocument();
   expect(screen.queryByText("never-render-generic-value")).not.toBeInTheDocument();
-  expect(screen.getByText("future-provider / future-action / v1")).toBeVisible();
+  expect(screen.getByText("future-provider.future-action.v1")).toBeInTheDocument();
+});
+
+test("explains UNKNOWN without failure or unsafe retry wording", () => {
+  render(<OperationDetailPage reconstruction={reconstruction} />);
+  expect(screen.getByText("This does not mean the operation failed.")).toBeVisible();
+  expect(screen.getByText("Stateback will not blindly retry the action.")).toBeVisible();
+  expect(screen.queryByRole("button", { name: /try again|retry failed operation/i })).not.toBeInTheDocument();
+});
+
+test("orders the human lifecycle by durable sequence while preserving raw audit order", () => {
+  render(<OperationDetailPage reconstruction={reconstruction} />);
+  const lifecycle = screen.getByRole("heading", { name: "Lifecycle" }).closest("section")!;
+  const entries = within(lifecycle).getAllByRole("listitem");
+  expect(entries[0]).toHaveTextContent("Approval granted");
+  expect(entries[1]).toHaveTextContent("Provider outcome became uncertain");
+  const raw = screen.getByRole("heading", { name: "Durable audit" }).parentElement!;
+  expect(within(raw).getAllByRole("listitem")[0]).toHaveTextContent("Sequence 8");
+});
+
+test("explains active verification and compensation uncertainty without treating either as failure", () => {
+  const verifying: Reconstruction = {
+    ...reconstruction,
+    operation: { ...reconstruction.operation, state: "VERIFYING" },
+  };
+  const compensationUnknown: Reconstruction = {
+    ...reconstruction,
+    operation: { ...reconstruction.operation, state: "COMPENSATION_UNKNOWN" },
+  };
+  const { rerender } = render(<OperationDetailPage reconstruction={verifying} />);
+  expect(screen.getByRole("heading", { name: "Verifying external outcome" })).toBeVisible();
+  expect(screen.getAllByText(/checking the provider for evidence/).length).toBeGreaterThan(0);
+  rerender(<OperationDetailPage reconstruction={compensationUnknown} />);
+  expect(screen.getByRole("heading", { name: "Compensation outcome unknown" })).toBeVisible();
+  expect(screen.getByText(/cannot yet prove whether it was applied/)).toBeVisible();
+});
+
+test("describes reconciliation-backed terminal outcomes only from durable decisions", () => {
+  const succeeded: Reconstruction = {
+    ...reconstruction,
+    operation: { ...reconstruction.operation, state: "SUCCEEDED" },
+    reconciliations: [{
+      ...reconstruction.reconciliations[0],
+      decision: { action: "MARK_SUCCEEDED", reason_code: "verification_applied" },
+    }],
+  };
+  const failed: Reconstruction = {
+    ...reconstruction,
+    operation: { ...reconstruction.operation, state: "FAILED" },
+    reconciliations: [{
+      ...reconstruction.reconciliations[0],
+      decision: { action: "MARK_FAILED", reason_code: "verification_not_applied" },
+    }],
+  };
+  expect(outcomeSummary(succeeded)).toMatch(/reconciled it to Succeeded without repeating it/);
+  expect(outcomeSummary(failed)).toMatch(/Verification evidence established/);
 });

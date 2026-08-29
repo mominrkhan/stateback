@@ -23,13 +23,8 @@ export function useNavigation(enabled: boolean): Navigation {
 
   const readLocation = useCallback(() => {
     const next = currentRoute();
-    if (enabled && next.name === "root") {
-      window.history.replaceState(null, "", "/operations");
-      setRoute({ name: "operations", search: "" });
-      return;
-    }
     setRoute(next);
-  }, [enabled]);
+  }, []);
 
   useEffect(() => {
     window.addEventListener("popstate", readLocation);

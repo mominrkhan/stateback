@@ -19,6 +19,19 @@ describe("operator client", () => {
     expect(init?.headers).toEqual({ Authorization: "Bearer   opaque token  " });
   });
 
+  it("loads the authenticated read-only overview through its strict parser", async () => {
+    const payload = {
+      contract_version: "v1", total_operations: 0,
+      attention: { awaiting_approval: 0, unknown: 0, manual_intervention: 0, compensation_issues: 0 },
+      active: { executing: 0, verifying: 0, compensating: 0 }, recent_operations: [],
+      providers: [{ provider: "github", configured: false, supported_effects: [{ provider: "github", action: "create_issue", version: "v1" }] }],
+    };
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(response(payload));
+    const client = createOperatorClient({ token: () => "token", fetcher });
+    expect((await client.overview()).providers[0].configured).toBe(false);
+    expect(fetcher.mock.calls[0][0]).toBe("/v1/operator/overview");
+  });
+
   it.each(["approve", "reject", "verify", "compensate", "retry_compensation", "escalate_compensation"] as const)("submits %s with caller-owned stable command identity", async (actionKey) => {
     const operation = listFixture.items[0]; const fetcher = vi.fn<typeof fetch>().mockResolvedValue(response(operation, 202));
     const client = createOperatorClient({ token: () => "token", fetcher });

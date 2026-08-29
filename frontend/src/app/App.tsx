@@ -7,6 +7,8 @@ import { AppShell } from "../components/AppShell";
 import { ApprovalsPage } from "../features/approvals/ApprovalsPage";
 import { sessionCommandAttempts } from "../features/commands/attemptRegistry";
 import { OperationsPage } from "../features/operations/OperationsPage";
+import { OverviewPage } from "../features/overview/OverviewPage";
+import { ProvidersPage } from "../features/providers/ProvidersPage";
 import { RecoveryPage } from "../features/recovery/RecoveryPage";
 import { useNavigation } from "./navigation";
 import { routeKey, type AppRoute } from "./routes";
@@ -28,12 +30,15 @@ function RouteContent({ route, navigate }: { route: AppRoute; navigate: (href: s
 
   switch (route.name) {
     case "root":
+      return <OverviewPage client={client} navigate={navigate} createAbortController={session.createAbortController} releaseAbortController={session.releaseAbortController} />;
     case "operations":
       return <OperationsPage client={client} search={route.name === "operations" ? route.search : ""} navigate={navigate} createAbortController={session.createAbortController} releaseAbortController={session.releaseAbortController} />;
     case "operation-detail":
       return <OperationDetailRoute client={client} operationId={route.operationId} session={session} />;
     case "approvals":
       return <ApprovalsPage client={client} createAbortController={session.createAbortController} releaseAbortController={session.releaseAbortController} />;
+    case "providers":
+      return <ProvidersPage client={client} createAbortController={session.createAbortController} releaseAbortController={session.releaseAbortController} />;
     case "recovery":
       return <RecoveryPage client={client} attemptRegistry={sessionCommandAttempts} createAbortController={session.createAbortController} releaseAbortController={session.releaseAbortController} sessionGeneration={session.sessionGeneration} isCurrentGeneration={session.isCurrentGeneration} />;
     case "not-found":

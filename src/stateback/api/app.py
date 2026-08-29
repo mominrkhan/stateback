@@ -178,6 +178,7 @@ def create_app(*, service: ApplicationService, authenticator: Authenticator) -> 
     def search_operations(
         identity: Identity,
         state: str | None = None,
+        attention: bool = False,
         provider: str | None = None,
         created_from: str | None = None,
         created_to: str | None = None,
@@ -188,6 +189,7 @@ def create_app(*, service: ApplicationService, authenticator: Authenticator) -> 
             identity,
             OperationSearch(
                 state=state,
+                attention=attention,
                 provider=provider,
                 created_from=created_from,
                 created_to=created_to,
@@ -195,6 +197,10 @@ def create_app(*, service: ApplicationService, authenticator: Authenticator) -> 
                 limit=limit,
             ),
         ).to_wire()
+
+    @app.get("/v1/operator/overview")
+    def operator_overview(identity: Identity) -> dict[str, object]:
+        return service.operator_overview(identity).to_wire()
 
     @app.get("/v1/operator/operations/{operation_id}")
     def reconstruct_operation(

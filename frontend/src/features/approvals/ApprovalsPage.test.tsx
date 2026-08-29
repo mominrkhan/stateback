@@ -39,6 +39,7 @@ const detail: Reconstruction = {
 
 function makeClient(overrides: Partial<OperatorClient> = {}): OperatorClient {
   return {
+    overview: vi.fn(),
     list: vi.fn().mockResolvedValue({ contract_version: "v1", items: [waiting, { ...waiting, operation_id: "second-operation" }], next_cursor: null }),
     reconstruct: vi.fn().mockResolvedValue(detail),
     semanticSummary: vi.fn(),
@@ -48,7 +49,7 @@ function makeClient(overrides: Partial<OperatorClient> = {}): OperatorClient {
 }
 
 async function selectFirstApproval() {
-  const links = await screen.findAllByRole("link", { name: /github \/ create_issue \/ v1/i });
+  const links = await screen.findAllByRole("link", { name: /create issue with github/i });
   fireEvent.click(links[0]);
 }
 
@@ -59,8 +60,8 @@ test("loads one exact-state queue request and reconstructs only the selected row
   expect(client.list).toHaveBeenCalledWith({ state: "AWAITING_APPROVAL", limit: 50 }, expect.any(AbortSignal));
   expect(client.reconstruct).not.toHaveBeenCalled();
   const queue = screen.getByRole("heading", { name: "Awaiting approval" }).parentElement!;
-  fireEvent.click(within(queue).getAllByRole("link", { name: /github \/ create_issue \/ v1/i })[0]);
-  expect(await screen.findByRole("heading", { name: "Approval review" })).toBeVisible();
+  fireEvent.click(within(queue).getAllByRole("link", { name: /create issue with github/i })[0]);
+  expect(await screen.findByRole("heading", { name: "Create issue" })).toBeVisible();
   expect(client.reconstruct).toHaveBeenCalledTimes(1);
   expect(client.reconstruct).toHaveBeenCalledWith(waiting.operation_id, expect.any(AbortSignal));
   expect(screen.queryByRole("button", { name: /approve all/i })).not.toBeInTheDocument();
@@ -70,14 +71,14 @@ test("renders exact binding, safe GitHub allowlist, and backend-authorized actio
   const client = makeClient();
   render(<ApprovalsPage client={client} />);
   await selectFirstApproval();
-  await screen.findByRole("heading", { name: "Approval review" });
-  expect(screen.getByText("octo-org")).toBeVisible();
-  expect(screen.getByText("Safe issue")).toBeVisible();
-  expect(screen.getByText("12 characters / 12 bytes; content withheld")).toBeVisible();
+  await screen.findByRole("heading", { name: "Create issue" });
+  expect(screen.getByText("octo-org/stateback")).toBeVisible();
+  expect(screen.getAllByText("Safe issue").find((node) => node.closest("details") === null)).toBeVisible();
+  expect(screen.getByText("Approval authorizes").nextElementSibling).toHaveTextContent("Create issue with GitHub");
   expect(screen.queryByText("private body")).not.toBeInTheDocument();
   expect(screen.queryByText("must-not-render")).not.toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "Approve operation" })).toBeVisible();
-  expect(screen.getByRole("button", { name: "Reject operation" })).toBeVisible();
+  expect(screen.getByRole("button", { name: "Approve create issue" })).toBeVisible();
+  expect(screen.getByRole("button", { name: "Reject create issue" })).toBeVisible();
   expect(screen.queryByRole("button", { name: /verification/i })).not.toBeInTheDocument();
 });
 
@@ -93,20 +94,20 @@ test("confirms the normalized exact binding and reloads before changing canonica
   const controller = new CommandController(client, { registry: new CommandAttemptRegistry(), makeId: () => ids.shift()! });
   render(<ApprovalsPage client={client} commandController={controller} />);
   await selectFirstApproval();
-  await screen.findByRole("heading", { name: "Approval review" });
+  await screen.findByRole("heading", { name: "Create issue" });
   fireEvent.change(screen.getByLabelText("Operator reason"), { target: { value: "  reviewed safely  " } });
-  fireEvent.click(screen.getByRole("button", { name: "Approve operation" }));
+  fireEvent.click(screen.getByRole("button", { name: "Approve create issue" }));
   const dialog = screen.getByRole("dialog");
   expect(within(dialog).getByText("approval-current")).toBeVisible();
   expect(within(dialog).getByText("reviewed safely")).toBeVisible();
-  fireEvent.click(within(dialog).getByRole("button", { name: "Confirm approval" }));
+  fireEvent.click(within(dialog).getByRole("button", { name: "Approve create issue" }));
   await waitFor(() => expect(client.command).toHaveBeenCalledWith({
     operationId: waiting.operation_id, actionKey: "approve", expectedVersion: 3,
     approvalId: "approval-current", reason: "reviewed safely", idempotencyKey: "idem-1", correlationId: "corr-1",
   }));
   await waitFor(() => expect(client.reconstruct).toHaveBeenCalledTimes(2));
   expect(await screen.findByText("Authoritative reconstruction reloaded.")).toBeVisible();
-  expect(screen.getByText("No approvals awaiting a decision")).toBeVisible();
+  expect(screen.getByText("No approvals waiting")).toBeVisible();
 });
 
 test("stale conflict preserves reason and renders refreshed version without optimistic success", async () => {
@@ -118,10 +119,10 @@ test("stale conflict preserves reason and renders refreshed version without opti
   const controller = new CommandController(client, { registry: new CommandAttemptRegistry(), makeId: vi.fn().mockReturnValueOnce("idem").mockReturnValueOnce("corr") });
   render(<ApprovalsPage client={client} commandController={controller} />);
   await selectFirstApproval();
-  await screen.findByRole("heading", { name: "Approval review" });
+  await screen.findByRole("heading", { name: "Create issue" });
   fireEvent.change(screen.getByLabelText("Operator reason"), { target: { value: "keep this reason" } });
-  fireEvent.click(screen.getByRole("button", { name: "Approve operation" }));
-  fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Confirm approval" }));
+  fireEvent.click(screen.getByRole("button", { name: "Approve create issue" }));
+  fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Approve create issue" }));
   expect(await screen.findByText("Approval changed on the server")).toBeVisible();
   expect(screen.getByLabelText("Operator reason")).toHaveValue("keep this reason");
   expect(screen.getByText("Your reason is preserved. Review the authoritative version before confirming a new request.")).toBeVisible();
@@ -132,7 +133,7 @@ test("omits approval controls when backend returns no eligible action", async ()
   const client = makeClient({ reconstruct: vi.fn().mockResolvedValue({ ...detail, available_actions: [] }) });
   render(<ApprovalsPage client={client} />);
   await selectFirstApproval();
-  await screen.findByRole("heading", { name: "Approval review" });
-  expect(screen.queryByRole("button", { name: "Approve operation" })).not.toBeInTheDocument();
-  expect(screen.queryByRole("button", { name: "Reject operation" })).not.toBeInTheDocument();
+  await screen.findByRole("heading", { name: "Create issue" });
+  expect(screen.queryByRole("button", { name: "Approve create issue" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Reject create issue" })).not.toBeInTheDocument();
 });

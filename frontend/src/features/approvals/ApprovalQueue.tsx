@@ -4,6 +4,7 @@ import type { Operation } from "../../api/types";
 import { CopyableId } from "../../components/CopyableId";
 import { StateBadge } from "../../components/StateBadge";
 import { Timestamp } from "../../components/Timestamp";
+import { actionLabel, providerLabel, requesterLabel } from "../../presentation/labels";
 
 interface ApprovalQueueProps {
   operations: Operation[];
@@ -27,7 +28,7 @@ export function ApprovalQueue({ operations, selectedOperationId, disabled = fals
           <li key={operation.operation_id}>
             <a
               href={`/operations/${encodeURIComponent(operation.operation_id)}`}
-              aria-label={`${operation.intent.effect.provider} / ${operation.intent.effect.action} / ${operation.intent.effect.version}; operation ${operation.operation_id}`}
+              aria-label={`${actionLabel(operation.intent.effect)} with ${providerLabel(operation.intent.effect.provider)}; operation ${operation.operation_id}`}
               aria-current={selectedOperationId === operation.operation_id ? "true" : undefined}
               aria-disabled={disabled || undefined}
               onClick={(event) => {
@@ -35,11 +36,12 @@ export function ApprovalQueue({ operations, selectedOperationId, disabled = fals
                 else follow(event, operation);
               }}
             >
-              {operation.intent.effect.provider} / {operation.intent.effect.action} / {operation.intent.effect.version}
+              <strong>{actionLabel(operation.intent.effect)}</strong>
+              <small>{providerLabel(operation.intent.effect.provider)} · Requested by {requesterLabel(operation.intent.requester)}</small>
             </a>
             <StateBadge state={operation.state} />
             <CopyableId value={operation.operation_id} label="operation ID" />
-            <Timestamp value={operation.created_at} />
+            <Timestamp value={operation.created_at} relative />
           </li>
         ))}
       </ul>
