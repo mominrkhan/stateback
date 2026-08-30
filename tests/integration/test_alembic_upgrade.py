@@ -45,13 +45,13 @@ def _connect() -> psycopg.Connection[tuple[object, ...]]:
     )
 
 
-def test_alembic_head_is_0001_journal_v1() -> None:
+def test_alembic_head_is_0002_operator_query_indexes() -> None:
     with _connect() as conn:
         with conn.cursor() as cur:
             cur.execute("SELECT version_num FROM alembic_version")
             row = cur.fetchone()
     assert row is not None
-    assert row[0] == "0001_journal_v1"
+    assert row[0] == "0002_operator_query_indexes"
 
 
 def test_alembic_upgrade_creates_journal_tables() -> None:

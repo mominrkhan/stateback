@@ -34,6 +34,7 @@ from stateback.domain.policy import Approval, PolicyDecision
 from stateback.domain.refs import EffectRef
 from stateback.domain.secrets import key_is_forbidden, value_is_forbidden
 from stateback.domain.verification import VerificationRequest, VerificationResult
+from stateback.persistence.repositories import OperationQuery
 from stateback.persistence.types import StoredReconciliationDecision
 from stateback.persistence.uow import unit_of_work
 from stateback.providers.exceptions import UnsupportedEffectError
@@ -199,16 +200,16 @@ def _cursor(operation: Operation) -> str:
     return base64.urlsafe_b64encode(raw.encode()).decode().rstrip("=")
 
 
-def _decode_cursor(value: str) -> tuple[str, str]:
+def _decode_cursor(value: str) -> tuple[datetime, OpaqueId]:
     try:
         padding = "=" * (-len(value) % 4)
         decoded = base64.urlsafe_b64decode(value + padding).decode()
         created_at, operation_id = decoded.split("|", 1)
-        datetime.fromisoformat(created_at.replace("Z", "+00:00"))
-        OpaqueId.from_wire(operation_id)
+        parsed_created_at = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+        parsed_operation_id = OpaqueId.from_wire(operation_id)
     except (ValueError, UnicodeDecodeError) as exc:
         raise ApplicationServiceError("invalid_cursor") from exc
-    return created_at, operation_id
+    return parsed_created_at, parsed_operation_id
 
 
 def _parse_utc(value: str, *, code: str) -> datetime:
@@ -395,11 +396,11 @@ class ApplicationService:
             raise ApplicationServiceError("invalid_pagination")
         self.get_operation(identity, operation_id)
         with unit_of_work(self._factory) as uow:
-            events = uow.audit_events.list_for_operation(operation_id)
-        remaining = [event for event in events if event.sequence > after_sequence]
-        selected = remaining[:limit]
-        next_value = selected[-1].sequence if len(remaining) > limit else None
-        return AuditPage(events=tuple(selected), next_after_sequence=next_value)
+            events, has_more = uow.audit_events.page_for_operation(
+                operation_id, after_sequence=after_sequence, limit=limit
+            )
+        next_value = events[-1].sequence if has_more else None
+        return AuditPage(events=events, next_after_sequence=next_value)
 
     def search_operations(
         self, identity: AuthenticatedIdentity, query: OperationSearch
@@ -407,65 +408,48 @@ class ApplicationService:
         identity.require(Role.OPERATOR)
         if query.attention and query.state is not None:
             raise ApplicationServiceError("invalid_filter_combination")
-        with unit_of_work(self._factory) as uow:
-            operations = uow.operations.list_all()
+        states: frozenset[OperationState] | None = None
         if query.attention:
-            operations = [
-                operation
-                for operation in operations
-                if operation.state in _ATTENTION_STATES
-            ]
+            states = _ATTENTION_STATES
         if query.state is not None:
             try:
-                state = OperationState(query.state)
+                states = frozenset({OperationState(query.state)})
             except ValueError as exc:
                 raise ApplicationServiceError("invalid_state") from exc
-            operations = [
-                operation for operation in operations if operation.state is state
-            ]
-        if query.provider is not None:
-            operations = [
-                operation
-                for operation in operations
-                if operation.intent.effect.provider == query.provider
-            ]
+        lower = None
         if query.created_from is not None:
             lower = _parse_utc(query.created_from, code="invalid_created_from")
-            operations = [
-                operation
-                for operation in operations
-                if operation.created_at.value >= lower
-            ]
+        upper = None
         if query.created_to is not None:
             upper = _parse_utc(query.created_to, code="invalid_created_to")
-            operations = [
-                operation
-                for operation in operations
-                if operation.created_at.value <= upper
-            ]
+        cursor_created_at = None
+        cursor_operation_id = None
         if query.cursor is not None:
-            marker = _decode_cursor(query.cursor)
-            keys = [
-                (operation.created_at.to_wire(), str(operation.operation_id))
-                for operation in operations
-            ]
-            try:
-                start = keys.index(marker) + 1
-            except ValueError as exc:
-                raise ApplicationServiceError("invalid_cursor") from exc
-            operations = operations[start:]
-        selected = operations[: query.limit]
-        next_value = _cursor(selected[-1]) if len(operations) > query.limit else None
-        return OperationPage(operations=tuple(selected), next_cursor=next_value)
+            cursor_created_at, cursor_operation_id = _decode_cursor(query.cursor)
+        with unit_of_work(self._factory) as uow:
+            result = uow.operations.search(
+                OperationQuery(
+                    states=states,
+                    provider=query.provider,
+                    created_from=lower,
+                    created_to=upper,
+                    cursor_created_at=cursor_created_at,
+                    cursor_operation_id=cursor_operation_id,
+                    limit=query.limit,
+                )
+            )
+        if not result.cursor_found:
+            raise ApplicationServiceError("invalid_cursor")
+        next_value = _cursor(result.operations[-1]) if result.has_more else None
+        return OperationPage(operations=result.operations, next_cursor=next_value)
 
     def operator_overview(self, identity: AuthenticatedIdentity) -> OperatorOverview:
         identity.require(Role.OPERATOR)
         with unit_of_work(self._factory) as uow:
-            operations = uow.operations.list_all()
+            persisted_counts = uow.operations.count_by_state()
+            recent = uow.operations.search(OperationQuery(limit=8)).operations
 
-        counts = {state: 0 for state in OperationState}
-        for operation in operations:
-            counts[operation.state] += 1
+        counts = {state: persisted_counts.get(state, 0) for state in OperationState}
 
         effects_by_provider: dict[str, list[EffectRef]] = {}
         if self._registry is not None:
@@ -480,7 +464,7 @@ class ApplicationService:
             for provider, effects in effects_by_provider.items()
         )
         return OperatorOverview(
-            total_operations=len(operations),
+            total_operations=sum(counts.values()),
             attention={
                 "awaiting_approval": counts[OperationState.AWAITING_APPROVAL],
                 "unknown": counts[OperationState.UNKNOWN],
@@ -495,7 +479,7 @@ class ApplicationService:
                 "verifying": counts[OperationState.VERIFYING],
                 "compensating": counts[OperationState.COMPENSATING],
             },
-            recent_operations=tuple(operations[:8]),
+            recent_operations=recent,
             providers=providers,
         )
 

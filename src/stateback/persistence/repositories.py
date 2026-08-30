@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
+from datetime import datetime
+
 from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.orm import Session
+from sqlalchemy.sql.elements import ColumnElement
 
 from stateback.domain.attempt import ExecutionAttempt
 from stateback.domain.audit import AuditEvent
@@ -105,6 +109,24 @@ _SAFE_DUPLICATE_MESSAGES: dict[str, str] = {
     "duplicate_outbox_event_id": "duplicate outbox event_id",
     "duplicate_reconciliation_decision_id": "duplicate reconciliation_decision_id",
 }
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class OperationQuery:
+    states: frozenset[OperationState] | None = None
+    provider: str | None = None
+    created_from: datetime | None = None
+    created_to: datetime | None = None
+    cursor_created_at: datetime | None = None
+    cursor_operation_id: OpaqueId | None = None
+    limit: int = 50
+
+
+@dataclass(frozen=True, slots=True)
+class OperationQueryResult:
+    operations: tuple[Operation, ...]
+    has_more: bool
+    cursor_found: bool
 
 
 def _constraint_name(exc: BaseException) -> str | None:
@@ -242,6 +264,72 @@ class OperationRepository(_SessionOps):
             OperationRow.created_at.desc(), OperationRow.operation_id
         )
         return [operation_from_row(row) for row in self.session.scalars(stmt)]
+
+    @staticmethod
+    def _query_filters(query: OperationQuery) -> list[ColumnElement[bool]]:
+        filters: list[ColumnElement[bool]] = []
+        if query.states is not None:
+            filters.append(
+                OperationRow.state.in_(state.value for state in query.states)
+            )
+        if query.provider is not None:
+            filters.append(
+                OperationRow.intent["effect"]["provider"].astext == query.provider
+            )
+        if query.created_from is not None:
+            filters.append(OperationRow.created_at >= query.created_from)
+        if query.created_to is not None:
+            filters.append(OperationRow.created_at <= query.created_to)
+        return filters
+
+    def search(self, query: OperationQuery) -> OperationQueryResult:
+        filters = self._query_filters(query)
+        cursor_found = True
+        if query.cursor_created_at is not None or query.cursor_operation_id is not None:
+            if query.cursor_created_at is None or query.cursor_operation_id is None:
+                raise ValueError("cursor fields must be supplied together")
+            cursor_id = opaque_to_uuid(query.cursor_operation_id)
+            cursor_found = bool(
+                self.session.execute(
+                    select(func.count())
+                    .select_from(OperationRow)
+                    .where(
+                        *filters,
+                        OperationRow.created_at == query.cursor_created_at,
+                        OperationRow.operation_id == cursor_id,
+                    )
+                ).scalar_one()
+            )
+            filters.extend(
+                (
+                    or_(
+                        OperationRow.created_at < query.cursor_created_at,
+                        and_(
+                            OperationRow.created_at == query.cursor_created_at,
+                            OperationRow.operation_id > cursor_id,
+                        ),
+                    ),
+                )
+            )
+        stmt = (
+            select(OperationRow)
+            .where(*filters)
+            .order_by(OperationRow.created_at.desc(), OperationRow.operation_id)
+            .limit(query.limit + 1)
+        )
+        rows = list(self.session.scalars(stmt))
+        return OperationQueryResult(
+            operations=tuple(operation_from_row(row) for row in rows[: query.limit]),
+            has_more=len(rows) > query.limit,
+            cursor_found=cursor_found,
+        )
+
+    def count_by_state(self) -> dict[OperationState, int]:
+        stmt = select(OperationRow.state, func.count()).group_by(OperationRow.state)
+        return {
+            OperationState(state): int(count)
+            for state, count in self.session.execute(stmt)
+        }
 
     def update_cas(self, expected_version: int, operation: Operation) -> None:
         if operation.version != expected_version + 1:
@@ -603,6 +691,24 @@ class AuditRepository(_SessionOps):
             .order_by(AuditEventRow.sequence)
         )
         return [audit_from_row(row) for row in self.session.scalars(stmt)]
+
+    def page_for_operation(
+        self, operation_id: OpaqueId, *, after_sequence: int, limit: int
+    ) -> tuple[tuple[AuditEvent, ...], bool]:
+        stmt = (
+            select(AuditEventRow)
+            .where(
+                AuditEventRow.operation_id == opaque_to_uuid(operation_id),
+                AuditEventRow.sequence > after_sequence,
+            )
+            .order_by(AuditEventRow.sequence)
+            .limit(limit + 1)
+        )
+        rows = list(self.session.scalars(stmt))
+        return (
+            tuple(audit_from_row(row) for row in rows[:limit]),
+            len(rows) > limit,
+        )
 
     def count_reason_for_command(
         self,

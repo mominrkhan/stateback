@@ -126,6 +126,25 @@ class OperationRow(Base):
     )
 
 
+Index(
+    "ix_operations_created_at_operation_id",
+    OperationRow.created_at.desc(),
+    OperationRow.operation_id,
+)
+Index(
+    "ix_operations_state_created_at_operation_id",
+    OperationRow.state,
+    OperationRow.created_at.desc(),
+    OperationRow.operation_id,
+)
+Index(
+    "ix_operations_provider_created_at_operation_id",
+    OperationRow.intent["effect"]["provider"].astext,
+    OperationRow.created_at.desc(),
+    OperationRow.operation_id,
+)
+
+
 class ExecutionAttemptRow(Base):
     __tablename__ = "execution_attempts"
 

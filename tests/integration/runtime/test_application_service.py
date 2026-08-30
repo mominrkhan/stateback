@@ -45,7 +45,7 @@ from stateback.semantic import (
 from tests.integration.persistence.conftest import make_operation as persisted_operation
 from tests.integration.runtime.conftest import make_submit, rebuild_runtime
 from tests.integration.runtime.idseq import IdSeq, execute_ids
-from tests.unit.domain.fixtures import REQUESTER
+from tests.unit.domain.fixtures import REQUESTER, TS
 from tests.unit.runtime.fixtures import ARGUMENTS
 
 pytestmark = [
@@ -97,6 +97,15 @@ def test_public_idempotency_status_audit_and_operator_reconstruction(
     )
     assert len(audit.events) == 1
     assert audit.next_after_sequence == 1
+    second_audit = service.audit_page(
+        identity=CALLER,
+        operation_id=first.operation_id,
+        after_sequence=audit.next_after_sequence,
+        limit=100,
+    )
+    assert second_audit.events
+    assert all(event.sequence > 1 for event in second_audit.events)
+    assert second_audit.next_after_sequence is None
 
     page = service.search_operations(OPERATOR, OperationSearch(limit=10))
     assert [item.operation_id for item in page.operations] == [first.operation_id]
@@ -353,6 +362,7 @@ def test_operator_overview_and_attention_filter_use_authoritative_states(
     uow_factory: sessionmaker[Session],
     runtime: SynchronousRuntime,
     registry: CapabilityRegistry,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     states = (
         OperationState.AWAITING_APPROVAL,
@@ -381,7 +391,15 @@ def test_operator_overview_and_attention_filter_use_authoritative_states(
         session_factory=uow_factory,
         runtime=runtime,
         registry=registry,
-        configured_providers=frozenset({"reference"}),
+        configured_providers=frozenset({_request().effect.provider}),
+    )
+    from stateback.persistence.repositories import OperationRepository
+
+    def full_journal_query_is_forbidden(_repository: OperationRepository) -> object:
+        raise AssertionError("operator request path loaded the full journal")
+
+    monkeypatch.setattr(
+        OperationRepository, "list_all", full_journal_query_is_forbidden
     )
     overview = service.operator_overview(OPERATOR)
     assert overview.total_operations == len(states)
@@ -407,6 +425,26 @@ def test_operator_overview_and_attention_filter_use_authoritative_states(
         OperationState.COMPENSATION_UNKNOWN,
         OperationState.COMPENSATION_FAILED,
     }
+    bounded = service.search_operations(
+        OPERATOR,
+        OperationSearch(
+            provider="reference",
+            created_from=TS.to_wire(),
+            created_to=TS.to_wire(),
+            limit=50,
+        ),
+    )
+    assert len(bounded.operations) == len(states)
+    assert (
+        service.search_operations(
+            OPERATOR, OperationSearch(provider="github", limit=50)
+        ).operations
+        == ()
+    )
+    with pytest.raises(ApplicationServiceError, match="invalid_cursor"):
+        service.search_operations(
+            OPERATOR, OperationSearch(cursor="not-a-cursor", limit=50)
+        )
     with pytest.raises(ApplicationServiceError, match="invalid_filter_combination"):
         service.search_operations(
             OPERATOR,
