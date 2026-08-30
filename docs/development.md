@@ -9,6 +9,7 @@ repository. It does not present planned commands as implemented behavior.
 - `uv == 0.12.5`
 - Docker with Compose support for infrastructure-backed tests
 - Node.js and npm for the frontend
+- macOS or Linux for `stateback dev` (the supervisor uses POSIX process locking)
 
 The repository does not pin a Node engine version, so no specific Node version
 is claimed here.
@@ -101,6 +102,7 @@ be committed.
 npm --prefix frontend ci
 npm --prefix frontend test -- --run
 npm --prefix frontend run build
+npm --prefix frontend run test:e2e -- --project=chromium
 ```
 
 The repository also provides:
@@ -121,6 +123,7 @@ mkdir my-agent && cd my-agent
 stateback init
 stateback connect github  # optional; uses the authenticated GitHub CLI
 stateback dev
+stateback mcp --help
 ```
 
 `stateback init` creates commit-safe `stateback.toml` and default-deny policy
@@ -166,6 +169,12 @@ uv run stateback <process>
 
 Use `stateback init --json` for machine-readable initialization output and
 `stateback dev --no-browser` when browser launch is undesirable.
+
+With GitHub connected and `stateback dev` running, the explicitly confirmed
+`stateback demo unknown --owner OWNER --repo SANDBOX` command creates a real
+marked issue, loses only that operation's successful response at the local
+worker boundary, and lets normal verification reconcile the operation. The
+one-shot facility is unavailable to the production worker command.
 
 ## Application configuration
 

@@ -16,12 +16,6 @@ benchmark, dependency/security, package, image, and provenance evidence for the
 tagged revision. PyPI uses Trusted Publishing/OIDC. GHCR uses the scoped GitHub
 token. No pull-request workflow receives publication permissions.
 
-Before any publication job, the workflow verifies the Phase 18 manifest's file
-checksums and aggregate digest, requires the final acceptance record to bind its
-G10-full verdict to that digest and source base, and compares the manifest plus
-evidence files with the complete Git diff from that base to the tagged revision.
-An added, removed, or modified file outside the reviewed overlay blocks release.
-
 Python archives are reproducible when built twice from the same locked tree
 with the same `SOURCE_DATE_EPOCH`: their SHA-256 digests must match. Frontend
 and strict MkDocs output are each built twice and compared by relative-path
@@ -50,3 +44,6 @@ when a fixed image becomes available.
 Human-controlled setup remains required for the PyPI trusted publisher, GHCR
 and Pages visibility, protected environment reviewers, tag/repository policy,
 and the final tag push. Local readiness does not perform or imply publication.
+After PyPI, image, and Pages jobs succeed, a least-privilege final job creates
+the tag's GitHub Release and attaches the exact wheel, source archive, and
+SHA-256 checksum file.

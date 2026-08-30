@@ -43,23 +43,25 @@ conflict, and infrastructure failures are transport errors; an operation in
 ## Python SDK
 
 ```python
-from stateback.sdk import StatebackClient
+from stateback import Stateback
 
-with StatebackClient(
-    base_url="https://stateback.example",
-    token="caller-token",
-) as client:
-    operation = client.submit(
-        effect={"provider": "github", "action": "create_issue", "version": "v1"},
-        arguments={
-            "owner": "your-github-organization",
-            "repo": "your-isolated-sandbox-repository",
-            "title": "Stateback integration test",
-        },
+with Stateback.local() as stateback:
+    operation = stateback.github.create_issue(
+        owner="your-github-organization",
+        repo="your-isolated-sandbox-repository",
+        title="Stateback integration test",
         idempotency_key="deploy-2026-08-21-001",
     )
     status = operation.status()
 ```
+
+Provider-native methods also cover issue comments, one-label additions,
+pull-request creation, and expected-head-bound merge. Every mutating method
+requires an `idempotency_key` that remains stable across caller retries of the
+same intent. `Stateback.from_env()` reads `STATEBACK_API_URL` and
+`STATEBACK_API_TOKEN`; that token is a Stateback caller identity, never a GitHub
+credential. `AsyncStateback` provides equivalent async methods and handles.
+The generic `StatebackClient.submit()` remains available for advanced effects.
 
 `OperationHandle.wait()` observes canonical forward-terminal states only.
 Its timeout or cancellation result is a client outcome and does not change the
@@ -67,10 +69,12 @@ operation.
 
 ## MCP
 
-The MCP server exposes the same managed operation path through
-`stateback_submit_operation`, `stateback_get_operation`, and
-`stateback_get_audit`. MCP input is untrusted. Tools do not accept provider
-URLs, credentials, shell commands, or a direct provider-execution escape hatch.
+Run `stateback mcp` for a local stdio server or
+`stateback mcp --print-config` for a generic command fragment. It discovers the
+same local caller identity as `Stateback.local()`. Typed tools cover the five
+GitHub effects plus operation status and audit. Merge submission remains
+approval-gated. MCP input is untrusted; tools do not accept provider URLs,
+credentials, shell commands, or a direct provider-execution escape hatch.
 
 See `contracts/PUBLIC_API_CONTRACT.md` for exact schemas, compatibility rules,
 pagination, and errors.

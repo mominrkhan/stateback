@@ -9,8 +9,8 @@ reconciliation, policy, approval, compensation, and audit semantics.
 
 The `0.1.0` release supports a self-hosted Python package and Docker Compose
 topology with an API, outbox relay, workers, operator frontend, PostgreSQL 16,
-and NATS 2.12 with JetStream. GitHub issue creation is the first
-production-shaped provider effect. Optional semantic assistance uses local
+and NATS 2.12 with JetStream. A focused GitHub issue/comment/label/pull-request
+workflow is the first production-shaped provider surface. Optional semantic assistance uses local
 Ollama and is non-authoritative.
 
 Start with the [architecture](architecture.md), [safety model](safety-model.md),

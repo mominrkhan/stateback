@@ -1,9 +1,10 @@
 # Developer guide
 
-Install the package with Python 3.12:
+Stateback is not yet published on PyPI. Install the current source with Python
+3.12:
 
 ```text
-pip install stateback==0.1.0
+python -m pip install "stateback @ git+https://github.com/mominrkhan/stateback.git@main"
 ```
 
 The package exposes the `stateback` command for the API, relay, and worker

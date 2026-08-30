@@ -102,17 +102,22 @@ Provider adapters declare effect-specific capability through an
 external identity, and immediate-evidence semantics. Adapters validate and
 return normalized evidence. They do not own operation transitions.
 
-The only real mutating effect registered by the release composition is:
+The real mutating effects registered by the release composition are:
 
 ```text
 github.create_issue.v1
+github.create_issue_comment.v1
+github.add_label.v1
+github.create_pull_request.v1
+github.merge_pull_request.v1
 ```
 
-It declares `MUTATING`, `MODERATE` risk, `NONE` idempotency, `CUSTOM`
-verification, `MITIGATING` compensation, and external-operation-identity
-support. A validated `201` can prove `APPLIED`; conclusive validation/rejection
-paths can prove `NOT_APPLIED`; transport ambiguity or malformed apparent
-success remains `UNKNOWN`.
+Each descriptor states its own risk, idempotency, verification, compensation,
+and external-identity semantics. Creation actions use positive operation-marker
+verification, label addition is naturally state-idempotent, and merge binds an
+expected head SHA. Conclusive validation/rejection paths can prove
+`NOT_APPLIED`; transport ambiguity or malformed apparent success remains
+`UNKNOWN`.
 
 Stateback places an operation marker in the issue body. Direct read-back or
 search that finds the marker is positive evidence. Not observing the marker is
@@ -160,12 +165,12 @@ See the [deployment guide](deployment.md) for the exact production procedure.
 
 ## Current limitations
 
-- Real provider breadth is limited to `github.create_issue.v1`.
+- Real provider breadth is limited to the five-effect GitHub workflow.
 - The primary worker consumer is serialized.
-- Some operator query filtering/pagination is application-memory based.
-- The migration history currently begins with one journal migration.
-- The CLI is process/operator oriented; `stateback init` and `stateback dev`
-  are not implemented.
+- Operator queries are bounded operational reads, not an analytics system.
+- The migration history contains the journal baseline and query indexes.
+- The local `stateback dev` composition is single-project and development-only;
+  production remains the separately hardened Compose topology.
 
 None of these limits changes the authority model: PostgreSQL remains canonical,
 `UNKNOWN` remains explicit, and provider guarantees remain effect-specific.

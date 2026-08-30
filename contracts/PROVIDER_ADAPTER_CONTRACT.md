@@ -123,6 +123,9 @@ ProviderAdapter {
 
   validate_execution(request) -> ValidationResult
 
+  verification_resource_ids(request) -> list<string>
+      # pure, deterministic identities persisted before provider invocation
+
   execute(context, request) -> ExecutionEvidence
 
   verify(context, verification_request) -> VerificationEvidence
@@ -168,6 +171,12 @@ Material arguments come from the canonical persisted intent or its secure durabl
 The adapter must not silently alter material intent.
 
 Provider-specific defaults that materially change behavior must be part of canonicalized request semantics.
+
+Before invoking a consequential provider mutation, the runtime persists the adapter's
+`verification_resource_ids(request)` on the started attempt. This method MUST be pure,
+deterministic, perform no provider I/O, and return the non-secret target identities needed
+to verify an ambiguous outcome after a process crash. Execution evidence may add identities,
+but MUST NOT erase these pre-boundary verification targets.
 
 ---
 

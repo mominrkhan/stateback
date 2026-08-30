@@ -32,7 +32,8 @@ STATEBACK_POLICY_CONFIG_FILE=/secure/stateback/policy.json
 STATEBACK_AUTH_CONFIG_FILE=/secure/stateback/auth.json
 ```
 
-The example policy requires explicit approval for GitHub issue creation. Rules
+The example policy requires explicit approval for all five supported GitHub
+effects, including expected-head-bound pull-request merge. Rules
 are evaluated in order and unmatched operations are denied. Review the policy
 as production authorization configuration; never replace it with the
 development allow-all engine.
@@ -42,8 +43,9 @@ a fine-grained isolated-repository credential, export
 `STATEBACK_GITHUB_TOKEN_FILE`, and add `-f deploy/github.compose.yaml` to each
 Compose command. The overlay mounts the credential only into the worker, which
 performs provider calls. The API receives a non-secret configured-capability
-signal for pre-durable validation and cannot read the provider credential. The
-minimum supported permission is Issues: write. Do not put the token in Compose,
+signal for pre-durable validation and cannot read the provider credential.
+Permissions must cover Issues: write and Pull requests: write for the effects
+the deployment authorizes. Do not put the token in Compose,
 images, Git, logs, or audit payloads.
 
 Release `0.1.0` sends that credential only to the exact

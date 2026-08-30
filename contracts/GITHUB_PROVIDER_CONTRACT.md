@@ -1,116 +1,116 @@
 # GitHub Provider Contract
 
-**Status:** Canonical Phase 10 v1
-**Owns:** Stateback's first GitHub effect, its capability declaration, evidence rules, error normalization, and compensation limits.
+**Status:** Canonical v1
+**Owns:** supported GitHub effects, capability declarations, evidence rules,
+error normalization, verification, and compensation limits.
 
-## 1. Selection and effect
+## Shared rules
 
-GitHub is the first real provider by explicit human decision for SB-008 on 2026-08-17.
+Every effect is a real GitHub REST mutation performed only by a
+provider-executing worker. The API, SDK, MCP process, operation intent,
+evidence, errors, logs, and frontend never receive the GitHub credential.
+Mutating transport failures, `5xx` responses, redirects, and malformed apparent
+successes are `UNKNOWN` because GitHub may have applied the request. Conclusive
+authentication, authorization, validation, and other documented pre-acceptance
+rejections are `NOT_APPLIED`.
 
-The initial production-shaped effect is:
+Stateback does not send a fabricated provider idempotency header. Creation
+effects append the non-secret marker
+`<!-- stateback-operation:{operation_id} -->`. Exact positive marker matches can
+prove `APPLIED`; search/list absence is `UNKNOWN` whenever observation may be
+eventually consistent, permission-limited, or incomplete. Verification is
+read-only and safe to repeat.
 
-```text
-EffectRef {
-  provider: "github"
-  action: "create_issue"
-  version: "v1"
-}
-```
+Before each mutation, the started attempt durably records the non-secret target
+identities needed for read-back: issue target, label, repository/head/base, or
+pull request/expected head SHA as applicable. A worker crash or ambiguous HTTP
+response cannot erase these targets.
 
-The effect creates an issue with caller-supplied `owner`, `repo`, `title`, optional `body`, optional labels, and optional assignees.
+Normalized evidence may retain the GitHub request ID, external database/resource
+identity, repository, issue/comment/PR number, bounded provider status, and an
+HTTPS GitHub reference. Response bodies, authorization headers, and credentials
+are never retained.
 
-It does not create pull requests even though GitHub's issue listing/search representations may include pull requests.
+## Supported effects
 
-## 2. Provider capability declaration
+| Effect | Risk | Idempotency | Verification | Compensation | Default local policy |
+|---|---|---|---|---|---|
+| `github.create_issue.v1` | `MODERATE` | `NONE` | `CUSTOM` marker search/direct read | `MITIGATING` close | approval |
+| `github.create_issue_comment.v1` | `MODERATE` | `NONE` | `CUSTOM` marker direct/list read | `NONE` | approval |
+| `github.add_label.v1` | `LOW` | `NATURAL` state convergence | `READ_BACK` issue labels | `NONE` | approval |
+| `github.create_pull_request.v1` | `MODERATE` | `NONE` | `CUSTOM` marker plus head/base/direct read | `MITIGATING` close | approval |
+| `github.merge_pull_request.v1` | `HIGH` | `NONE` | `READ_BACK` exact PR and expected head | `NONE` | approval |
 
-| Capability | v1 declaration | Basis |
-|---|---|---|
-| Mutability | `MUTATING` | Creates an externally visible repository issue |
-| Risk | `MODERATE` | Consequential repository mutation, without code/deployment mutation |
-| Idempotency | `NONE` | GitHub's create-issue REST endpoint does not expose a provider idempotency key |
-| Verification | `CUSTOM` | Stateback marker search or direct issue read-back |
-| Compensation | `MITIGATING` | Closing the issue reduces its active effect but does not erase history or recreate the pre-effect world |
-| External identity | Supported | GitHub issue database ID and `owner/repo#number` are persisted |
-| Immediate `APPLIED` proof | Supported | A well-formed HTTP 201 issue representation |
-| Immediate `NOT_APPLIED` proof | Conditional | Conclusive HTTP rejection such as authentication, authorization, or validation rejection |
+Unmatched effects remain denied. Submission acceptance, including through MCP,
+does not prove provider application.
 
-Stateback MUST NOT generate or send a fake GitHub idempotency header and MUST NOT describe issue creation as exactly-once.
+## Create issue
 
-GitHub's official create/update issue contract and fine-grained permission requirement are documented at:
+Arguments are `owner`, `repo`, `title`, optional `body`, optional string arrays
+`labels` and `assignees`. A well-formed `201` issue identity is
+`APPLIED`. Verification reads a known issue or searches for the exact marker.
+Closing a known issue is mitigating because history and prior observation
+remain; it is not rollback.
 
-- <https://docs.github.com/en/rest/issues/issues#create-an-issue>
-- <https://docs.github.com/en/rest/issues/issues#update-an-issue>
+## Create issue comment
 
-## 3. Durable operation marker
+Arguments are `owner`, `repo`, positive `issue_number`, and `body`. The marker
+is appended to the comment body. A well-formed `201` comment identity is
+`APPLIED`. Verification reads a known comment or lists the target issue's
+comments and accepts only an exact marker match. Bounded-list absence is
+`UNKNOWN`. Comment deletion is not exposed as compensation.
 
-Before POST, the adapter appends this non-secret marker to the issue body:
+## Add label
 
-```text
-<!-- stateback-operation:{operation_id} -->
-```
+Arguments are `owner`, `repo`, positive `issue_number`, and one non-empty
+`label`. GitHub's add-label operation converges on the label being present;
+repeating the same addition does not create another label, so the effect is
+declared `NATURAL`. A well-formed `200` label list containing the intended label
+is `APPLIED`. Read-back presence is `APPLIED`; read-back absence is
+`NOT_APPLIED` for the intended current-state effect. Stateback does not remove
+the label as compensation because it may have existed before this operation.
 
-The stable Stateback operation ID is already durable before provider invocation. The marker is provider-specific request metadata and does not become lifecycle authority.
+## Create pull request
 
-The marker supports positive verification after response loss. It does not make the POST idempotent.
+Arguments are `owner`, `repo`, `head`, `base`, `title`, optional `body`, and
+optional `draft`. The marker is appended to the PR body. A well-formed `201` PR
+identity whose returned head and base match the submitted intent is `APPLIED`.
+Identity or head/base inconsistency is `UNKNOWN`. Verification reads a known PR
+or lists the intended repository/head/base and requires both the exact marker
+and exact head/base. List absence is `UNKNOWN`.
+Closing a known PR is mitigating, not rollback.
 
-## 4. Execution outcome mapping
+## Merge pull request
 
-- Well-formed HTTP `201` with issue ID, number, HTTPS URL, and state: `APPLIED`.
-- Local validation or missing credential before network: `NOT_APPLIED`.
-- HTTP `401`, authorization/rate-limit rejection, `400`, `410`, or `422`: `NOT_APPLIED` because GitHub returned a conclusive rejection response.
-- HTTP `5xx`, transport timeout/reset, or other failure after transmission may have begun: `UNKNOWN`.
-- HTTP `201` with malformed/inconsistent issue representation: `UNKNOWN` because the issue may have been created.
+Arguments are `owner`, `repo`, positive `pull_number`, a 40-hex `head_sha`, and
+optional `merge_method` from `merge`, `squash`, or `rebase`. Stateback sends the
+expected SHA through GitHub's merge endpoint so a changed head cannot silently
+reuse approval for older intent. Only a well-formed `200` response with
+`merged: true` and a well-formed 40-hex merge SHA is immediately `APPLIED`.
+GitHub's documented `405` cannot-merge and `409` expected-SHA mismatch responses,
+or a well-formed `200` with `merged: false`, establish `NOT_APPLIED`.
 
-Provider response bodies are not copied into normalized errors or audit records. Only safe status, request ID, external IDs, retry timing, and bounded evidence fields are retained.
+Verification reads the exact PR. It returns `APPLIED` only when the PR is merged
+and the observed head equals the approved expected SHA. The `merged` field must
+be an actual boolean. An unchanged expected head with `merged: false` is
+`NOT_APPLIED`; a changed head, inaccessible state,
+transport failure, or malformed evidence is `UNKNOWN`. A merge cannot be
+generically unmerged, so compensation is `NONE`.
 
-## 5. Verification and reconciliation
+## Local UNKNOWN demonstration
 
-When `owner/repo#number` is known, verification reads that issue directly.
+The normal production worker has no fault-injection facility. The private local
+development worker may wrap this adapter with a one-shot arm stored in its
+private run directory and named by one exact operation ID. Only after that
+operation's create-issue call returns `APPLIED` does the wrapper consume the arm
+and discard usable success evidence, producing `UNKNOWN`. Normal marker
+verification then owns reconciliation. Wrong IDs, non-regular arm paths,
+pre-mutation failures, and subsequent operations are unaffected. There is no
+HTTP fault endpoint or policy bypass.
 
-When the create response was lost and no external identity is known, verification uses GitHub issue search for the exact Stateback marker across repositories visible to the configured credential.
+## Sandbox
 
-- Exact marker match in a well-formed issue: `APPLIED`.
-- No marker observed: `UNKNOWN`, never `NOT_APPLIED`, because search can be eventually consistent, permission-limited, or incomplete.
-- Transport, authentication, malformed, contradictory, or inaccessible evidence: `UNKNOWN`.
-
-Verification is safe to repeat and never creates or updates an issue.
-
-## 6. Compensation
-
-Compensation PATCHes the known issue to `state: closed`.
-
-- Well-formed response showing `closed`: compensation outcome `APPLIED`.
-- Conclusive rejection: compensation outcome `NOT_APPLIED`.
-- Transport/5xx/malformed response after possible acceptance: compensation outcome `UNKNOWN` and requires verification.
-- Compensation verification reads the issue: `closed` proves compensation `APPLIED`; `open` proves compensation `NOT_APPLIED`; inaccessible or inconsistent evidence remains `UNKNOWN`.
-
-Closing is `MITIGATING`, not exact rollback: the issue and its history remain externally visible and a user may reopen it.
-
-## 7. Credentials and sandbox
-
-Production transport requires HTTPS and sends credentials only in the GitHub authorization header. Tokens, response bodies, and authorization headers MUST NOT enter Stateback evidence, errors, logs, audit, fixtures, or source control.
-
-The minimum initial sandbox permission is a fine-grained credential scoped to the isolated repository with **Issues: write**. Broader repository or organization scopes are not required by this adapter.
-
-Live tests require all of:
-
-- `STATEBACK_RUN_GITHUB_SANDBOX=1`;
-- `STATEBACK_GITHUB_SANDBOX_CONFIRM_MUTATION=1`;
-- an isolated sandbox owner/repository;
-- a manually supplied ephemeral token.
-
-The sandbox test creates an issue and then closes it. It MUST NOT target a production repository.
-
-## 8. Required evidence
-
-- capability and registry contract tests;
-- local validation and credential absence;
-- successful external identity capture;
-- conclusive provider rejection;
-- rate-limit normalization and retry timing;
-- transport timeout and HTTP 5xx ambiguity;
-- malformed success ambiguity;
-- positive marker verification and inconclusive absence;
-- mitigating close and compensation read-back;
-- cross-phase runtime test through policy/approval, outbox work, execution, `UNKNOWN`, and verification;
-- opt-in isolated GitHub sandbox test.
+Normal CI uses deterministic transports. Real GitHub tests require the existing
+explicit sandbox confirmation and an isolated repository. Merge testing also
+requires `STATEBACK_GITHUB_SANDBOX_CONFIRM_MERGE=1`; no ordinary CI job mutates
+GitHub.

@@ -44,6 +44,40 @@ stateback connect github
 
 Restart `stateback dev` after changing provider configuration.
 
+## Use Stateback
+
+Provider-native Python calls return a durable operation handle; submission is
+not proof that GitHub applied the action. Keep each idempotency key stable when
+retrying the same intended operation.
+
+```python
+from stateback import Stateback
+
+sb = Stateback.local()
+operation = sb.github.create_issue(
+    owner="your-org",
+    repo="your-sandbox",
+    title="Agent discovered a problem",
+    body="Details from the agent run.",
+    idempotency_key="agent-run-123-issue-1",
+)
+print(operation.status().state)
+```
+
+Connect an MCP-capable agent through the local stdio server:
+
+```bash
+stateback mcp --print-config
+stateback mcp
+```
+
+To experience response-loss recovery with one explicitly confirmed real
+sandbox mutation:
+
+```bash
+stateback demo unknown --owner your-org --repo your-sandbox
+```
+
 ## Why Stateback
 
 An API timeout or local exception does not prove that an external side effect
@@ -67,14 +101,16 @@ execution or ACID transactions across arbitrary external APIs.
 
 ## Current provider support
 
-The only real mutating provider effect currently implemented is
-`github.create_issue.v1`. It creates a GitHub issue, supports positive
-verification through a Stateback operation marker, and can mitigate the effect
-by closing the issue. Closing is compensation, not exact rollback. GitHub issue
-creation has no provider idempotency key, so inconclusive evidence remains
-`UNKNOWN` rather than making an unsafe retry.
+Stateback 0.1 supports a focused GitHub workflow: create issue, comment on an
+issue, add one label, create a pull request, and merge a pull request. Creation
+effects use positive marker verification; inconclusive search absence remains
+`UNKNOWN`. Adding the same label is naturally state-idempotent but Stateback
+does not remove labels as compensation because a label may have pre-existed.
+Pull-request merge binds an expected head SHA, requires approval under the
+generated safe policy, and has no generic compensation.
 
-GitHub is disabled by default. Provider credentials are loaded only by
+GitHub is disabled by default. Local development is supported on macOS and
+Linux. Provider credentials are loaded only by
 provider-executing workers and are never exposed by the Operator UI.
 
 ## Documentation
