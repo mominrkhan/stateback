@@ -76,12 +76,15 @@ export function ApprovalReview({
   const [reviewingAbandonment, setReviewingAbandonment] = useState(false);
   const action = actionLabel(operation.intent.effect);
   const provider = providerLabel(operation.intent.effect.provider);
-  const knownGitHubIssue = operation.intent.effect.provider === "github" && operation.intent.effect.action === "create_issue";
+  const knownGitHubOperation = operation.intent.effect.provider === "github";
   const argumentsValue = operation.intent.arguments;
-  const argumentsRecord = knownGitHubIssue && typeof argumentsValue === "object" && argumentsValue !== null && !Array.isArray(argumentsValue) ? argumentsValue : null;
+  const argumentsRecord = knownGitHubOperation && typeof argumentsValue === "object" && argumentsValue !== null && !Array.isArray(argumentsValue) ? argumentsValue : null;
   const owner = typeof argumentsRecord?.owner === "string" ? argumentsRecord.owner : null;
   const repo = typeof argumentsRecord?.repo === "string" ? argumentsRecord.repo : null;
   const title = typeof argumentsRecord?.title === "string" ? argumentsRecord.title : null;
+  const pullNumber = typeof argumentsRecord?.pull_number === "number" ? argumentsRecord.pull_number : null;
+  const expectedHead = typeof argumentsRecord?.head_sha === "string" ? argumentsRecord.head_sha : null;
+  const mergeMethod = typeof argumentsRecord?.merge_method === "string" ? argumentsRecord.merge_method : null;
   const policy = reconstruction.policy_decisions.find((decision) => decision.policy_decision_id === approval?.policy_decision_id) ?? reconstruction.policy_decisions.at(-1);
   const approveLabel = `Approve ${action.toLocaleLowerCase()}`;
 
@@ -100,6 +103,9 @@ export function ApprovalReview({
         {owner && repo && <div><dt>Repository</dt><dd>{owner}/{repo}</dd></div>}
         <div><dt>Policy</dt><dd>{policy?.explanation ?? policy?.reason_codes.join(", ") ?? "Human approval required"}</dd></div>
         {title && <div><dt>Title</dt><dd>{title}</dd></div>}
+        {pullNumber && <div><dt>Pull request</dt><dd>#{pullNumber}</dd></div>}
+        {expectedHead && <div><dt>Expected head</dt><dd><code>{expectedHead}</code></dd></div>}
+        {mergeMethod && <div><dt>Method</dt><dd>{mergeMethod}</dd></div>}
         <div><dt>Approval authorizes</dt><dd>{action} with {provider}</dd></div>
       </dl>
       <details className="technical-details"><summary>Technical approval binding</summary><dl><div><dt>Operation ID</dt><dd><CopyableId value={operation.operation_id} label="operation ID" /></dd></div><div><dt>Expected version</dt><dd>{operation.version}</dd></div><div><dt>Current approval ID</dt><dd>{approval ? <CopyableId value={approval.approval_id} label="approval ID" /> : "Not present"}</dd></div><div><dt>Intent digest</dt><dd><CopyableId value={operation.intent.intent_digest} label="intent digest" /></dd></div><div><dt>Effect</dt><dd><code>{effectIdentifier(operation.intent.effect)}</code></dd></div></dl><SummaryPanel reconstruction={reconstruction} /></details>

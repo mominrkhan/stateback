@@ -82,6 +82,46 @@ test("renders exact binding, safe GitHub allowlist, and backend-authorized actio
   expect(screen.queryByRole("button", { name: /verification/i })).not.toBeInTheDocument();
 });
 
+test("makes merge approval bind the pull request, expected head, and method", async () => {
+  const mergeWaiting: Operation = {
+    ...waiting,
+    risk_level: "HIGH",
+    intent: {
+      ...waiting.intent,
+      effect: { provider: "github", action: "merge_pull_request", version: "v1" },
+      arguments: {
+        owner: "octo-org",
+        repo: "stateback",
+        pull_number: 123,
+        head_sha: "abcdef1234567890abcdef1234567890abcdef12",
+        merge_method: "squash",
+      },
+    },
+  };
+  const mergeDetail: Reconstruction = {
+    ...detail,
+    operation: mergeWaiting,
+    approvals: detail.approvals.map((approval) => ({
+      ...approval,
+      operation_id: mergeWaiting.operation_id,
+      intent_digest: mergeWaiting.intent.intent_digest,
+    })),
+  };
+  const client = makeClient({
+    list: vi.fn().mockResolvedValue({ contract_version: "v1", items: [mergeWaiting], next_cursor: null }),
+    reconstruct: vi.fn().mockResolvedValue(mergeDetail),
+  });
+
+  render(<ApprovalsPage client={client} />);
+  fireEvent.click(await screen.findByRole("link", { name: /merge pull request with github/i }));
+
+  expect(await screen.findByRole("heading", { name: "Merge pull request" })).toBeVisible();
+  expect(screen.getAllByText("#123")[0]).toBeVisible();
+  expect(screen.getAllByText("abcdef1234567890abcdef1234567890abcdef12")[0]).toBeVisible();
+  expect(screen.getAllByText("squash")[0]).toBeVisible();
+  expect(screen.getByRole("button", { name: "Approve merge pull request" })).toBeVisible();
+});
+
 test("confirms the normalized exact binding and reloads before changing canonical display", async () => {
   const fresh = { ...detail, operation: { ...waiting, state: "READY", version: 4 }, available_actions: [] };
   const client = makeClient({

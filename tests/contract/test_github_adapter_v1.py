@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import urllib.error
 import urllib.request
+from dataclasses import replace
 from http.client import HTTPMessage
 from io import BytesIO
 
@@ -28,9 +29,14 @@ from stateback.domain.enums import (
 from stateback.domain.evidence import ProviderEvidence
 from stateback.domain.ids import OpaqueId
 from stateback.domain.jsonutil import json_from_plain
+from stateback.domain.refs import EffectRef
 from stateback.domain.verification import VerificationRequest
 from stateback.providers.github import (
+    EFFECT_ADD_LABEL,
     EFFECT_CREATE_ISSUE,
+    EFFECT_CREATE_ISSUE_COMMENT,
+    EFFECT_CREATE_PULL_REQUEST,
+    EFFECT_MERGE_PULL_REQUEST,
     GitHubAdapter,
     GitHubHttpResponse,
 )
@@ -549,3 +555,514 @@ def test_malformed_provider_url_syntax_remains_canonical_unknown(
         ErrorKind.MALFORMED_PROVIDER_RESPONSE,
         ErrorKind.PROVIDER_INCONSISTENT,
     }
+
+
+def workflow_request(
+    effect: EffectRef, arguments: dict[str, object]
+) -> ProviderExecutionRequest:
+    return ProviderExecutionRequest(effect=effect, arguments=json_from_plain(arguments))
+
+
+def workflow_verification(
+    effect: EffectRef, resources: tuple[str, ...]
+) -> VerificationRequest:
+    return VerificationRequest(
+        contract_version=CONTRACT_VERSION,
+        verification_id=VERIFY_ID,
+        operation_id=OPERATION_ID,
+        operation_version=4,
+        target=VerificationTarget.ORIGINAL_EFFECT,
+        target_attempt_id=ATTEMPT_ID,
+        effect=effect,
+        external_operation_id=None,
+        external_resource_ids=resources,
+        idempotency_identity=f"sb:v1:op:{OPERATION_ID.value}",
+        provider_evidence_refs=(),
+        requested_at=TS,
+    )
+
+
+def pull(
+    *,
+    merged: bool = False,
+    head_sha: str = "a" * 40,
+    head_ref: str = "feature",
+    head_label: str = "acme:feature",
+    base_ref: str = "main",
+) -> dict[str, object]:
+    return {
+        "id": 7001,
+        "number": 17,
+        "html_url": "https://github.com/acme/sandbox/pull/17",
+        "state": "closed" if merged else "open",
+        "body": MARKER,
+        "head": {
+            "sha": head_sha,
+            "ref": head_ref,
+            "label": head_label,
+            "repo": {"full_name": "acme/sandbox"},
+        },
+        "base": {"ref": base_ref, "repo": {"full_name": "acme/sandbox"}},
+        "merged": merged,
+    }
+
+
+WORKFLOW_CASES: tuple[tuple[EffectRef, dict[str, object]], ...] = (
+    (
+        EFFECT_CREATE_ISSUE_COMMENT,
+        {"owner": "acme", "repo": "sandbox", "issue_number": 42, "body": "note"},
+    ),
+    (
+        EFFECT_ADD_LABEL,
+        {"owner": "acme", "repo": "sandbox", "issue_number": 42, "label": "safe"},
+    ),
+    (
+        EFFECT_CREATE_PULL_REQUEST,
+        {
+            "owner": "acme",
+            "repo": "sandbox",
+            "head": "feature",
+            "base": "main",
+            "title": "Safe change",
+        },
+    ),
+    (
+        EFFECT_MERGE_PULL_REQUEST,
+        {
+            "owner": "acme",
+            "repo": "sandbox",
+            "pull_number": 17,
+            "head_sha": "a" * 40,
+        },
+    ),
+)
+
+
+def test_v01_workflow_descriptors_are_conservative() -> None:
+    github = adapter(ScriptedTransport())
+    expected = {
+        EFFECT_CREATE_ISSUE: (IdempotencyMode.NONE, CompensationKind.MITIGATING),
+        EFFECT_CREATE_ISSUE_COMMENT: (IdempotencyMode.NONE, CompensationKind.NONE),
+        EFFECT_ADD_LABEL: (IdempotencyMode.NATURAL, CompensationKind.NONE),
+        EFFECT_CREATE_PULL_REQUEST: (IdempotencyMode.NONE, CompensationKind.MITIGATING),
+        EFFECT_MERGE_PULL_REQUEST: (IdempotencyMode.NONE, CompensationKind.NONE),
+    }
+    assert set(github.supported_effects()) == set(expected)
+    for effect, (idempotency, compensation) in expected.items():
+        descriptor = github.descriptor(effect)
+        assert descriptor.idempotency_mode is idempotency
+        assert descriptor.compensation_kind is compensation
+
+
+@pytest.mark.parametrize(("effect", "arguments"), WORKFLOW_CASES)
+def test_workflow_known_rejection_retains_verification_targets(
+    effect: EffectRef, arguments: dict[str, object]
+) -> None:
+    transport = ScriptedTransport()
+    transport.enqueue(response(422, {"message": "rejected"}))
+    github = adapter(transport)
+    request = workflow_request(effect, arguments)
+    result = github.execute(context(), request)
+    assert result.outcome is EffectOutcome.NOT_APPLIED
+    assert result.external_resource_ids == github.verification_resource_ids(request)
+
+
+@pytest.mark.parametrize(("effect", "arguments"), WORKFLOW_CASES)
+def test_workflow_transport_ambiguity_retains_verification_targets(
+    effect: EffectRef, arguments: dict[str, object]
+) -> None:
+    transport = ScriptedTransport()
+    transport.enqueue(TimeoutError("response lost"))
+    github = adapter(transport)
+    request = workflow_request(effect, arguments)
+    result = github.execute(context(), request)
+    assert result.outcome is EffectOutcome.UNKNOWN
+    assert result.external_resource_ids == github.verification_resource_ids(request)
+
+
+@pytest.mark.parametrize(("effect", "arguments"), WORKFLOW_CASES)
+def test_workflow_malformed_success_retains_verification_targets(
+    effect: EffectRef, arguments: dict[str, object]
+) -> None:
+    transport = ScriptedTransport()
+    success_status = (
+        200 if effect in {EFFECT_ADD_LABEL, EFFECT_MERGE_PULL_REQUEST} else 201
+    )
+    transport.enqueue(response(success_status, {}))
+    github = adapter(transport)
+    request = workflow_request(effect, arguments)
+    result = github.execute(context(), request)
+    assert result.outcome is EffectOutcome.UNKNOWN
+    assert result.error is not None
+    assert result.error.kind is ErrorKind.MALFORMED_PROVIDER_RESPONSE
+    assert result.external_resource_ids == github.verification_resource_ids(request)
+
+
+@pytest.mark.parametrize(("effect", "arguments"), WORKFLOW_CASES)
+def test_workflow_missing_credential_and_expired_deadline_never_send(
+    effect: EffectRef, arguments: dict[str, object]
+) -> None:
+    request = workflow_request(effect, arguments)
+    missing_transport = ScriptedTransport()
+    missing = GitHubAdapter(
+        transport=missing_transport,
+        clock=FixedClock(TS),
+        credential_configured=False,
+    ).execute(context(), request)
+    assert missing.outcome is EffectOutcome.NOT_APPLIED
+    assert missing.error is not None
+    assert missing.error.kind is ErrorKind.AUTHENTICATION
+    assert missing_transport.requests == []
+
+    expired_transport = ScriptedTransport()
+    expired = adapter(expired_transport).execute(
+        replace(context(), deadline=TS), request
+    )
+    assert expired.outcome is EffectOutcome.NOT_APPLIED
+    assert expired.error is not None
+    assert expired.error.code == "github.deadline.not_sent"
+    assert expired_transport.requests == []
+
+
+def test_create_comment_marks_body_and_verifies_positive_presence() -> None:
+    request = workflow_request(
+        EFFECT_CREATE_ISSUE_COMMENT,
+        {"owner": "acme", "repo": "sandbox", "issue_number": 42, "body": "note"},
+    )
+    comment = {
+        "id": 81,
+        "html_url": "https://github.com/acme/sandbox/issues/42#issuecomment-81",
+        "issue_url": "https://api.github.com/repos/acme/sandbox/issues/42",
+        "body": f"note\n\n{MARKER}",
+    }
+    transport = ScriptedTransport()
+    transport.enqueue(response(201, comment))
+    result = adapter(transport).execute(context(), request)
+    assert result.outcome is EffectOutcome.APPLIED
+    assert MARKER in json.loads(transport.requests[0][2] or b"{}")["body"]
+    transport.enqueue(response(200, comment))
+    verified = adapter(transport).verify(
+        context(),
+        workflow_verification(
+            EFFECT_CREATE_ISSUE_COMMENT, result.external_resource_ids
+        ),
+    )
+    assert verified.outcome is EffectOutcome.APPLIED
+
+
+def test_comment_transport_ambiguity_keeps_target_and_absence_is_unknown() -> None:
+    request = workflow_request(
+        EFFECT_CREATE_ISSUE_COMMENT,
+        {"owner": "acme", "repo": "sandbox", "issue_number": 42, "body": "note"},
+    )
+    transport = ScriptedTransport()
+    transport.enqueue(TimeoutError("lost response"))
+    result = adapter(transport).execute(context(), request)
+    assert result.outcome is EffectOutcome.UNKNOWN
+    assert result.external_resource_ids == ("github:issue-target:acme/sandbox#42",)
+    transport.enqueue(response(200, []))
+    verified = adapter(transport).verify(
+        context(),
+        workflow_verification(
+            EFFECT_CREATE_ISSUE_COMMENT, result.external_resource_ids
+        ),
+    )
+    assert verified.outcome is EffectOutcome.UNKNOWN
+
+
+def test_add_label_is_natural_and_read_back_can_prove_absence() -> None:
+    request = workflow_request(
+        EFFECT_ADD_LABEL,
+        {"owner": "acme", "repo": "sandbox", "issue_number": 42, "label": "safe"},
+    )
+    transport = ScriptedTransport()
+    transport.enqueue(response(200, [{"name": "safe"}]))
+    result = adapter(transport).execute(context(), request)
+    assert result.outcome is EffectOutcome.APPLIED
+    assert json.loads(transport.requests[0][2] or b"{}") == {"labels": ["safe"]}
+    transport.enqueue(response(200, issue() | {"labels": []}))
+    verified = adapter(transport).verify(
+        context(), workflow_verification(EFFECT_ADD_LABEL, result.external_resource_ids)
+    )
+    assert verified.outcome is EffectOutcome.NOT_APPLIED
+
+
+def test_create_pull_request_marks_body_and_absence_stays_unknown() -> None:
+    request = workflow_request(
+        EFFECT_CREATE_PULL_REQUEST,
+        {
+            "owner": "acme",
+            "repo": "sandbox",
+            "head": "feature",
+            "base": "main",
+            "title": "Safe change",
+            "body": "details",
+        },
+    )
+    transport = ScriptedTransport()
+    transport.enqueue(response(201, pull()))
+    result = adapter(transport).execute(context(), request)
+    assert result.outcome is EffectOutcome.APPLIED
+    assert MARKER in json.loads(transport.requests[0][2] or b"{}")["body"]
+    transport.enqueue(response(200, []))
+    unknown = adapter(transport).verify(
+        context(),
+        workflow_verification(
+            EFFECT_CREATE_PULL_REQUEST,
+            (
+                "github:repository:acme/sandbox",
+                "github:head-ref:feature",
+                "github:base-ref:main",
+            ),
+        ),
+    )
+    assert unknown.outcome is EffectOutcome.UNKNOWN
+    assert transport.requests[-1][1] == (
+        "/repos/acme/sandbox/pulls?state=all&head=acme%3Afeature&base=main&per_page=100"
+    )
+
+
+def test_create_pull_verification_preserves_qualified_fork_head_filter() -> None:
+    transport = ScriptedTransport()
+    transport.enqueue(response(200, []))
+    adapter(transport).verify(
+        context(),
+        workflow_verification(
+            EFFECT_CREATE_PULL_REQUEST,
+            (
+                "github:repository:acme/sandbox",
+                "github:head-ref:contributor:feature",
+                "github:base-ref:main",
+            ),
+        ),
+    )
+    assert transport.requests[-1][1] == (
+        "/repos/acme/sandbox/pulls?"
+        "state=all&head=contributor%3Afeature&base=main&per_page=100"
+    )
+
+
+@pytest.mark.parametrize(
+    "provider_pull",
+    [pull(head_ref="other"), pull(base_ref="release")],
+)
+def test_create_pull_request_never_accepts_intent_inconsistent_response(
+    provider_pull: dict[str, object],
+) -> None:
+    request = workflow_request(
+        EFFECT_CREATE_PULL_REQUEST,
+        {
+            "owner": "acme",
+            "repo": "sandbox",
+            "head": "feature",
+            "base": "main",
+            "title": "Safe change",
+        },
+    )
+    transport = ScriptedTransport()
+    transport.enqueue(response(201, provider_pull))
+    result = adapter(transport).execute(context(), request)
+    assert result.outcome is EffectOutcome.UNKNOWN
+    assert result.error is not None
+    assert result.error.kind is ErrorKind.PROVIDER_INCONSISTENT
+
+
+def test_create_pull_verification_rejects_intent_inconsistent_direct_read() -> None:
+    transport = ScriptedTransport()
+    transport.enqueue(response(200, pull(head_ref="other")))
+    result = adapter(transport).verify(
+        context(),
+        workflow_verification(
+            EFFECT_CREATE_PULL_REQUEST,
+            (
+                "github:pull:acme/sandbox#17",
+                "github:head-ref:feature",
+                "github:base-ref:main",
+            ),
+        ),
+    )
+    assert result.outcome is EffectOutcome.UNKNOWN
+    assert result.error is not None
+    assert result.error.kind is ErrorKind.PROVIDER_INCONSISTENT
+
+
+def test_create_pull_compensation_closes_only_the_known_pull() -> None:
+    request = workflow_request(
+        EFFECT_CREATE_PULL_REQUEST,
+        {
+            "owner": "acme",
+            "repo": "sandbox",
+            "head": "feature",
+            "base": "main",
+            "title": "Safe change",
+        },
+    )
+    transport = ScriptedTransport()
+    transport.enqueue(response(201, pull()))
+    github = adapter(transport)
+    executed = github.execute(context(), request)
+    assert executed.evidence is not None
+    transport.enqueue(response(200, pull() | {"state": "closed"}))
+    compensated = github.compensate(
+        context(),
+        CompensationRequest(
+            original_operation_id=OPERATION_ID,
+            compensation_id=COMPENSATION_ID,
+            compensation_attempt_id=COMPENSATION_ATTEMPT_ID,
+            original_evidence=(executed.evidence,),
+            compensation_arguments=request.arguments,
+            idempotency_identity=f"sb:v1:comp:{COMPENSATION_ID.value}",
+            provider_idempotency_key=None,
+        ),
+    )
+    assert compensated.outcome is EffectOutcome.APPLIED
+    assert transport.requests[-1][0:2] == (
+        "PATCH",
+        "/repos/acme/sandbox/pulls/17",
+    )
+
+
+def test_merge_binds_expected_head_and_verification_rejects_changed_head() -> None:
+    request = workflow_request(
+        EFFECT_MERGE_PULL_REQUEST,
+        {
+            "owner": "acme",
+            "repo": "sandbox",
+            "pull_number": 17,
+            "head_sha": "a" * 40,
+            "merge_method": "squash",
+        },
+    )
+    transport = ScriptedTransport()
+    transport.enqueue(response(200, {"merged": True, "sha": "b" * 40}))
+    result = adapter(transport).execute(context(), request)
+    assert result.outcome is EffectOutcome.APPLIED
+    assert json.loads(transport.requests[0][2] or b"{}") == {
+        "merge_method": "squash",
+        "sha": "a" * 40,
+    }
+    transport.enqueue(response(200, pull(merged=True, head_sha="c" * 40)))
+    verified = adapter(transport).verify(
+        context(),
+        workflow_verification(EFFECT_MERGE_PULL_REQUEST, result.external_resource_ids),
+    )
+    assert verified.outcome is EffectOutcome.UNKNOWN
+    assert verified.error is not None
+    assert verified.error.code == "github.verify.merge_head_changed"
+
+
+@pytest.mark.parametrize("merged", [None, "true", 1])
+def test_merge_verification_requires_explicit_boolean_merged(
+    merged: object,
+) -> None:
+    provider_pull = pull()
+    if merged is None:
+        provider_pull.pop("merged")
+    else:
+        provider_pull["merged"] = merged
+    transport = ScriptedTransport()
+    transport.enqueue(response(200, provider_pull))
+    verified = adapter(transport).verify(
+        context(),
+        workflow_verification(
+            EFFECT_MERGE_PULL_REQUEST,
+            ("github:pull:acme/sandbox#17", f"github:head-sha:{'a' * 40}"),
+        ),
+    )
+    assert verified.outcome is EffectOutcome.UNKNOWN
+    assert verified.error is not None
+    assert verified.error.kind is ErrorKind.MALFORMED_PROVIDER_RESPONSE
+
+
+@pytest.mark.parametrize("merge_sha", ["", "abc", "z" * 40, 123])
+def test_merge_success_requires_well_formed_merge_sha(merge_sha: object) -> None:
+    request = workflow_request(
+        EFFECT_MERGE_PULL_REQUEST,
+        {
+            "owner": "acme",
+            "repo": "sandbox",
+            "pull_number": 17,
+            "head_sha": "a" * 40,
+        },
+    )
+    transport = ScriptedTransport()
+    transport.enqueue(response(200, {"merged": True, "sha": merge_sha}))
+    result = adapter(transport).execute(context(), request)
+    assert result.outcome is EffectOutcome.UNKNOWN
+    assert result.error is not None
+    assert result.error.kind is ErrorKind.MALFORMED_PROVIDER_RESPONSE
+
+
+def test_merge_conclusive_not_merged_response_is_not_unknown() -> None:
+    request = workflow_request(
+        EFFECT_MERGE_PULL_REQUEST,
+        {
+            "owner": "acme",
+            "repo": "sandbox",
+            "pull_number": 17,
+            "head_sha": "a" * 40,
+        },
+    )
+    transport = ScriptedTransport()
+    transport.enqueue(response(200, {"merged": False, "message": "Head was modified"}))
+
+    result = adapter(transport).execute(context(), request)
+
+    assert result.outcome is EffectOutcome.NOT_APPLIED
+    assert result.error is not None
+    assert result.error.code == "github.merge.not_applied"
+    assert result.external_resource_ids == (
+        "github:pull:acme/sandbox#17",
+        f"github:head-sha:{'a' * 40}",
+    )
+
+
+@pytest.mark.parametrize("status", [405, 409])
+def test_merge_documented_rejections_prove_not_applied(status: int) -> None:
+    request = workflow_request(
+        EFFECT_MERGE_PULL_REQUEST,
+        {
+            "owner": "acme",
+            "repo": "sandbox",
+            "pull_number": 17,
+            "head_sha": "a" * 40,
+        },
+    )
+    transport = ScriptedTransport()
+    transport.enqueue(response(status, {"message": "Merge cannot be performed"}))
+
+    result = adapter(transport).execute(context(), request)
+
+    assert result.outcome is EffectOutcome.NOT_APPLIED
+    assert result.error is not None
+    assert result.error.code == "github.merge.rejected"
+
+
+@pytest.mark.parametrize(
+    ("effect", "arguments"),
+    [
+        (
+            EFFECT_CREATE_ISSUE_COMMENT,
+            {"owner": "acme", "repo": "sandbox", "issue_number": 0, "body": "x"},
+        ),
+        (
+            EFFECT_ADD_LABEL,
+            {"owner": "acme", "repo": "sandbox", "issue_number": 1, "label": ""},
+        ),
+        (
+            EFFECT_CREATE_PULL_REQUEST,
+            {"owner": "acme", "repo": "sandbox", "head": "h", "base": "b"},
+        ),
+        (
+            EFFECT_MERGE_PULL_REQUEST,
+            {"owner": "acme", "repo": "sandbox", "pull_number": 1, "head_sha": "wrong"},
+        ),
+    ],
+)
+def test_workflow_validation_rejects_before_network(
+    effect: EffectRef, arguments: dict[str, object]
+) -> None:
+    transport = ScriptedTransport()
+    result = adapter(transport).execute(context(), workflow_request(effect, arguments))
+    assert result.outcome is EffectOutcome.NOT_APPLIED
+    assert transport.requests == []

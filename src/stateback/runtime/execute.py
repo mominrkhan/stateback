@@ -446,6 +446,18 @@ def _claim_and_execute(
 ) -> RuntimeResult:
     ids = command.ids
     descriptor = registry.descriptor(op.intent.effect)
+    arguments = op.intent.arguments
+    if arguments is None:
+        raise StatebackRuntimeError(
+            "illegal_combination",
+            "INLINE intent is missing arguments at execute",
+        )
+    request = ProviderExecutionRequest(
+        effect=op.intent.effect,
+        arguments=arguments,
+    )
+    adapter = registry.adapter_for(op.intent.effect)
+    verification_resource_ids = adapter.verification_resource_ids(request)
     started: ExecutionAttempt | None = None
     claimed: Operation | None = None
     key: str | None = None
@@ -465,6 +477,7 @@ def _claim_and_execute(
                 attempt_number=len(prior) + 1,
                 started_at=clock.now(),
                 provider_idempotency_key=key,
+                external_resource_ids=verification_resource_ids,
                 correlation_id=command.correlation_id,
             )
             result = transitions.apply(
@@ -530,12 +543,6 @@ def _claim_and_execute(
             "claim did not produce a started attempt",
         )
     maybe_crash(crash_after, RuntimeCrashPoint.AFTER_CLAIM_COMMIT)
-    arguments = claimed.intent.arguments
-    if arguments is None:
-        raise StatebackRuntimeError(
-            "illegal_combination",
-            "INLINE intent is missing arguments at execute",
-        )
     context = ProviderExecutionContext(
         operation_id=claimed.operation_id,
         attempt_id=started.attempt_id,
@@ -544,11 +551,6 @@ def _claim_and_execute(
         correlation_id=command.correlation_id,
         deadline=None,
     )
-    request = ProviderExecutionRequest(
-        effect=claimed.intent.effect,
-        arguments=arguments,
-    )
-    adapter = registry.adapter_for(claimed.intent.effect)
     try:
         evidence = adapter.execute(context, request)
     except (UnsupportedEffectError, ContractValidationError):

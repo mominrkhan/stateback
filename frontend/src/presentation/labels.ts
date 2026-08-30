@@ -29,8 +29,15 @@ export function providerLabel(provider: string): string {
 }
 
 export function actionLabel(effect: EffectRef): string {
-  if (effect.provider === "github" && effect.action === "create_issue" && effect.version === "v1") {
-    return "Create issue";
+  if (effect.provider === "github" && effect.version === "v1") {
+    const labels: Record<string, string> = {
+      create_issue: "Create issue",
+      create_issue_comment: "Comment on issue",
+      add_label: "Add label",
+      create_pull_request: "Create pull request",
+      merge_pull_request: "Merge pull request",
+    };
+    return labels[effect.action] ?? "Unsupported effect";
   }
   return "Unsupported effect";
 }

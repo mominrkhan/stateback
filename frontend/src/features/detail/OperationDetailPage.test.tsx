@@ -219,6 +219,36 @@ test("shows only the GitHub create-issue approval allowlist and body counts", ()
   }
 });
 
+test("renders the head-bound GitHub merge summary without raw unknown arguments", () => {
+  const merge: Reconstruction = {
+    ...base,
+    operation: {
+      ...base.operation,
+      risk_level: "HIGH",
+      intent: {
+        ...base.operation.intent,
+        effect: { provider: "github", action: "merge_pull_request", version: "v1" },
+        arguments: {
+          owner: "octo-org",
+          repo: "stateback",
+          pull_number: 123,
+          head_sha: "abcdef1234567890abcdef1234567890abcdef12",
+          merge_method: "squash",
+          hidden_provider_option: "must-not-render",
+        },
+      },
+    },
+  };
+
+  render(<OperationDetailPage reconstruction={merge} />);
+
+  expect(screen.getByRole("heading", { name: "Merge pull request with GitHub" })).toBeVisible();
+  expect(screen.getByText("#123")).toBeVisible();
+  expect(screen.getByText("abcdef1234567890abcdef1234567890abcdef12")).toBeVisible();
+  expect(screen.getByText("squash")).toBeVisible();
+  expect(screen.queryByText("must-not-render")).not.toBeInTheDocument();
+});
+
 test("keeps provider evidence, attempt outcome, reconciliation, and compensation distinct", () => {
   render(<OperationDetailPage reconstruction={reconstruction} />);
   expect(screen.getByRole("heading", { name: "Execution attempt 1: authoritative provider evidence" })).toBeVisible();

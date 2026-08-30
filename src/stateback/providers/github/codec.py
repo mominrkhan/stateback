@@ -8,27 +8,76 @@ from urllib.parse import unquote, urlparse
 from stateback.domain.capability import CompensationRequest, ProviderExecutionContext
 from stateback.domain.exceptions import ContractValidationError
 from stateback.domain.jsonutil import JsonArray, JsonObject, JsonValue
+from stateback.domain.refs import EffectRef
+from stateback.providers.github.effects import (
+    EFFECT_ADD_LABEL,
+    EFFECT_CREATE_ISSUE,
+    EFFECT_CREATE_ISSUE_COMMENT,
+    EFFECT_CREATE_PULL_REQUEST,
+    EFFECT_MERGE_PULL_REQUEST,
+)
 
 type IssueIdentity = tuple[str, str, int, str, str]
 type IssueResource = tuple[str, str, int]
+type CommentIdentity = tuple[str, str, int, int, str]
+type PullIdentity = tuple[str, str, int, str, str, str]
 
 
-def validate_arguments(arguments: JsonValue) -> str | None:
+def validate_arguments(effect: EffectRef, arguments: JsonValue) -> str | None:
     if not isinstance(arguments, JsonObject):
         return "github.validation.arguments_not_object"
     data = arguments.as_dict()
-    allowed = {"owner", "repo", "title", "body", "labels", "assignees"}
+    required: tuple[str, ...]
+    if effect == EFFECT_CREATE_ISSUE:
+        allowed = {"owner", "repo", "title", "body", "labels", "assignees"}
+        required = ("owner", "repo", "title")
+    elif effect == EFFECT_CREATE_ISSUE_COMMENT:
+        allowed = {"owner", "repo", "issue_number", "body"}
+        required = ("owner", "repo", "body")
+    elif effect == EFFECT_ADD_LABEL:
+        allowed = {"owner", "repo", "issue_number", "label"}
+        required = ("owner", "repo", "label")
+    elif effect == EFFECT_CREATE_PULL_REQUEST:
+        allowed = {"owner", "repo", "head", "base", "title", "body", "draft"}
+        required = ("owner", "repo", "head", "base", "title")
+    elif effect == EFFECT_MERGE_PULL_REQUEST:
+        allowed = {"owner", "repo", "pull_number", "head_sha", "merge_method"}
+        required = ("owner", "repo", "head_sha")
+    else:
+        return "github.validation.unknown_effect"
     if set(data) - allowed:
         return "github.validation.unknown_argument"
-    for field in ("owner", "repo", "title"):
+    for field in required:
         value = data.get(field)
         if not isinstance(value, str) or not value.strip():
             return f"github.validation.invalid_{field}"
-    if len(required_str(data, "title")) > 256:
+    if "title" in required and len(required_str(data, "title")) > 256:
         return "github.validation.title_too_long"
     body = data.get("body")
     if body is not None and not isinstance(body, str):
         return "github.validation.invalid_body"
+    if isinstance(body, str) and len(body) > 65536:
+        return "github.validation.body_too_long"
+    number_field = (
+        "pull_number" if effect == EFFECT_MERGE_PULL_REQUEST else "issue_number"
+    )
+    if number_field in allowed:
+        number = data.get(number_field)
+        if isinstance(number, bool) or not isinstance(number, int) or number < 1:
+            return f"github.validation.invalid_{number_field}"
+    if effect == EFFECT_CREATE_PULL_REQUEST:
+        draft = data.get("draft")
+        if draft is not None and not isinstance(draft, bool):
+            return "github.validation.invalid_draft"
+    if effect == EFFECT_MERGE_PULL_REQUEST:
+        head_sha = required_str(data, "head_sha")
+        if len(head_sha) != 40 or any(
+            ch not in "0123456789abcdefABCDEF" for ch in head_sha
+        ):
+            return "github.validation.invalid_head_sha"
+        method = data.get("merge_method")
+        if method is not None and method not in {"merge", "squash", "rebase"}:
+            return "github.validation.invalid_merge_method"
     for field in ("labels", "assignees"):
         value = data.get(field)
         if value is not None and (
@@ -37,6 +86,15 @@ def validate_arguments(arguments: JsonValue) -> str | None:
         ):
             return f"github.validation.invalid_{field}"
     return None
+
+
+def required_int(data: dict[str, JsonValue], field: str) -> int:
+    value = data.get(field)
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ContractValidationError(
+            "illegal_combination", f"validated GitHub {field} must be an integer"
+        )
+    return value
 
 
 def argument_map(arguments: JsonValue) -> dict[str, JsonValue]:
@@ -74,6 +132,24 @@ def create_payload(data: dict[str, JsonValue], marker: str) -> dict[str, object]
     return payload
 
 
+def marked_body(data: dict[str, JsonValue], marker: str) -> str:
+    body_value = data.get("body")
+    body = body_value if isinstance(body_value, str) else ""
+    return f"{body}\n\n{marker}" if body else marker
+
+
+def pull_payload(data: dict[str, JsonValue], marker: str) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "head": required_str(data, "head"),
+        "base": required_str(data, "base"),
+        "title": required_str(data, "title"),
+        "body": marked_body(data, marker),
+    }
+    if isinstance(data.get("draft"), bool):
+        payload["draft"] = data["draft"]
+    return payload
+
+
 def json_bytes(value: object) -> bytes:
     return json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8")
 
@@ -86,6 +162,18 @@ def parse_object(body: bytes) -> dict[str, object] | None:
     if not isinstance(parsed, dict):
         return None
     return {str(key): value for key, value in parsed.items()}
+
+
+def parse_array(body: bytes) -> list[dict[str, object]] | None:
+    try:
+        parsed = json.loads(body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    if not isinstance(parsed, list) or any(
+        not isinstance(item, dict) for item in parsed
+    ):
+        return None
+    return [{str(key): value for key, value in item.items()} for item in parsed]
 
 
 def issue_identity(
@@ -153,6 +241,170 @@ def _matches_repository_url(url: str, owner: str, repo: str) -> bool:
     path = _https_path(url, host="api.github.com")
     expected = f"/repos/{owner}/{repo}".casefold()
     return path == expected
+
+
+def comment_identity(
+    parsed: dict[str, object] | None,
+    *,
+    owner: str,
+    repo: str,
+    issue_number: int,
+) -> CommentIdentity | None:
+    if parsed is None:
+        return None
+    comment_id = parsed.get("id")
+    html_url = parsed.get("html_url")
+    issue_url = parsed.get("issue_url")
+    body = parsed.get("body")
+    try:
+        parsed_html = urlparse(html_url) if isinstance(html_url, str) else None
+        html_valid = (
+            parsed_html is not None
+            and parsed_html.scheme == "https"
+            and parsed_html.hostname == "github.com"
+            and parsed_html.username is None
+            and parsed_html.password is None
+            and parsed_html.port is None
+            and not parsed_html.query
+            and unquote(parsed_html.path).rstrip("/").casefold()
+            == f"/{owner}/{repo}/issues/{issue_number}".casefold()
+            and parsed_html.fragment == f"issuecomment-{comment_id}"
+        )
+    except ValueError:
+        html_valid = False
+    if (
+        isinstance(comment_id, bool)
+        or not isinstance(comment_id, int)
+        or not isinstance(html_url, str)
+        or not isinstance(issue_url, str)
+        or not isinstance(body, str)
+        or not html_valid
+        or _https_path(url=issue_url, host="api.github.com")
+        != f"/repos/{owner}/{repo}/issues/{issue_number}".casefold()
+    ):
+        return None
+    return (
+        f"github:comment:{comment_id}",
+        f"github:comment:{owner}/{repo}#{issue_number}:{comment_id}",
+        issue_number,
+        comment_id,
+        html_url,
+    )
+
+
+def pull_identity(
+    parsed: dict[str, object] | None,
+    *,
+    owner: str,
+    repo: str,
+    expected_number: int | None = None,
+) -> PullIdentity | None:
+    if parsed is None:
+        return None
+    pull_id = parsed.get("id")
+    number = parsed.get("number")
+    html_url = parsed.get("html_url")
+    state = parsed.get("state")
+    head = parsed.get("head")
+    base = parsed.get("base")
+    head_sha = head.get("sha") if isinstance(head, dict) else None
+    head_ref = head.get("ref") if isinstance(head, dict) else None
+    base_ref = base.get("ref") if isinstance(base, dict) else None
+    if (
+        isinstance(pull_id, bool)
+        or not isinstance(pull_id, int)
+        or isinstance(number, bool)
+        or not isinstance(number, int)
+        or not isinstance(html_url, str)
+        or state not in {"open", "closed"}
+        or not isinstance(head_sha, str)
+        or not valid_git_sha(head_sha)
+        or not isinstance(head_ref, str)
+        or not head_ref
+        or not isinstance(base_ref, str)
+        or not base_ref
+        or (expected_number is not None and number != expected_number)
+        or _https_path(url=html_url, host="github.com")
+        != f"/{owner}/{repo}/pull/{number}".casefold()
+    ):
+        return None
+    return (
+        f"github:pull:{pull_id}",
+        f"github:pull:{owner}/{repo}#{number}",
+        number,
+        html_url,
+        state,
+        head_sha,
+    )
+
+
+def pull_matches_intent(
+    parsed: dict[str, object] | None,
+    *,
+    owner: str,
+    repo: str,
+    expected_head: str,
+    expected_base: str,
+) -> bool:
+    if parsed is None:
+        return False
+    head = parsed.get("head")
+    base = parsed.get("base")
+    if not isinstance(head, dict) or not isinstance(base, dict):
+        return False
+    head_ref = head.get("ref")
+    head_label = head.get("label")
+    head_repo = head.get("repo")
+    base_ref = base.get("ref")
+    base_repo = base.get("repo")
+    if not isinstance(head_ref, str) or not isinstance(base_ref, str):
+        return False
+    head_full_name = head_repo.get("full_name") if isinstance(head_repo, dict) else None
+    base_full_name = base_repo.get("full_name") if isinstance(base_repo, dict) else None
+    target_full_name = f"{owner}/{repo}"
+    head_matches = (
+        head_label == expected_head
+        if ":" in expected_head
+        else head_ref == expected_head
+        and isinstance(head_full_name, str)
+        and head_full_name.casefold() == target_full_name.casefold()
+    )
+    return (
+        head_matches
+        and base_ref == expected_base
+        and isinstance(base_full_name, str)
+        and base_full_name.casefold() == target_full_name.casefold()
+    )
+
+
+def valid_git_sha(value: object) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) == 40
+        and all(ch in "0123456789abcdefABCDEF" for ch in value)
+    )
+
+
+def issue_target(owner: str, repo: str, number: int) -> str:
+    return f"github:issue-target:{owner}/{repo}#{number}"
+
+
+def pull_target(owner: str, repo: str, number: int) -> str:
+    return f"github:pull:{owner}/{repo}#{number}"
+
+
+def parse_prefixed_resource(resources: tuple[str, ...], prefix: str) -> str | None:
+    for resource in resources:
+        if resource.startswith(prefix):
+            return resource[len(prefix) :]
+    return None
+
+
+def parse_target_resource(
+    resources: tuple[str, ...], prefix: str
+) -> IssueResource | None:
+    raw = parse_prefixed_resource(resources, prefix)
+    return None if raw is None else parse_resource(raw)
 
 
 def first_issue_resource(

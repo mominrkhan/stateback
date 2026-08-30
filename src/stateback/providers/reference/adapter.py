@@ -270,6 +270,12 @@ class ReferenceAdapter:
             )
         return ValidationResult(accepted=True, error=None)
 
+    def verification_resource_ids(
+        self, request: ProviderExecutionRequest
+    ) -> tuple[str, ...]:
+        del request
+        return ()
+
     def execute(
         self,
         context: ProviderExecutionContext,

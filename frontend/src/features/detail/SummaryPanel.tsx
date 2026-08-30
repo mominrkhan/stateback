@@ -16,10 +16,10 @@ function safeStrings(record: Record<string, JsonValue>, key: string): string[] |
   return Array.isArray(value) && value.every((item) => typeof item === "string") ? value : null;
 }
 
-function GitHubCreateIssueReview({ reconstruction }: { reconstruction: Reconstruction }) {
+function GitHubOperationReview({ reconstruction }: { reconstruction: Reconstruction }) {
   const { intent } = reconstruction.operation;
   const effect = intent.effect;
-  if (effect.provider !== "github" || effect.action !== "create_issue" || effect.version !== "v1") return null;
+  if (effect.provider !== "github" || effect.version !== "v1") return null;
   const args = jsonRecord(intent.arguments);
   if (!args) return null;
   const body = safeString(args, "body");
@@ -27,13 +27,19 @@ function GitHubCreateIssueReview({ reconstruction }: { reconstruction: Reconstru
     ["Owner", safeString(args, "owner")],
     ["Repository", safeString(args, "repo")],
     ["Title", safeString(args, "title")],
+    ["Issue number", typeof args.issue_number === "number" ? String(args.issue_number) : null],
+    ["Pull request", typeof args.pull_number === "number" ? `#${args.pull_number}` : null],
+    ["Label", safeString(args, "label")],
+    ["Branches", safeString(args, "head") && safeString(args, "base") ? `${safeString(args, "head")} → ${safeString(args, "base")}` : null],
+    ["Expected head", safeString(args, "head_sha")],
+    ["Merge method", safeString(args, "merge_method")],
     ["Labels", safeStrings(args, "labels")?.join(", ") ?? null],
     ["Assignees", safeStrings(args, "assignees")?.join(", ") ?? null],
   ] as const;
 
   return (
     <section aria-labelledby="github-review-heading">
-      <h3 id="github-review-heading">GitHub issue review</h3>
+      <h3 id="github-review-heading">GitHub operation review</h3>
       <dl>
         {allowed.flatMap(([label, value]) => value === null ? [] : [
           <div key={label}><dt>{label}</dt><dd>{value}</dd></div>,
@@ -63,7 +69,7 @@ export function SummaryPanel({ reconstruction }: { reconstruction: Reconstructio
         <div><dt>Backend available actions</dt><dd>{reconstruction.available_actions.join(", ") || "None"}</dd></div>
         <div><dt>Latest audit reason</dt><dd>{reconstruction.audit.at(-1)?.reason_code ?? "Not recorded"}</dd></div>
       </dl>
-      <GitHubCreateIssueReview reconstruction={reconstruction} />
+      <GitHubOperationReview reconstruction={reconstruction} />
       <section aria-labelledby="policy-heading">
         <h3 id="policy-heading">Policy decisions</h3>
         {policyDecisions.length === 0 ? <EmptyDetail>No policy decision is present in this reconstruction.</EmptyDetail> : (

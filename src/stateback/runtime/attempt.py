@@ -41,6 +41,7 @@ def build_started_attempt(
     attempt_number: int,
     started_at: UtcTimestamp,
     provider_idempotency_key: str | None,
+    external_resource_ids: tuple[str, ...],
     correlation_id: str | None,
 ) -> ExecutionAttempt:
     return ExecutionAttempt(
@@ -53,7 +54,7 @@ def build_started_attempt(
         completed_at=None,
         provider_idempotency_key=provider_idempotency_key,
         external_operation_id=None,
-        external_resource_ids=(),
+        external_resource_ids=external_resource_ids,
         outcome=None,
         evidence=None,
         error=None,
@@ -75,7 +76,11 @@ def build_completed_attempt(
         evidence=evidence.evidence,
         error=evidence.error,
         external_operation_id=evidence.external_operation_id,
-        external_resource_ids=evidence.external_resource_ids,
+        external_resource_ids=tuple(
+            dict.fromkeys(
+                started.external_resource_ids + evidence.external_resource_ids
+            )
+        ),
     )
 
 

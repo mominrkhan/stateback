@@ -28,6 +28,10 @@ class ProviderAdapter(Protocol):
         self, request: ProviderExecutionRequest
     ) -> ValidationResult: ...
 
+    def verification_resource_ids(
+        self, request: ProviderExecutionRequest
+    ) -> tuple[str, ...]: ...
+
     def execute(
         self,
         context: ProviderExecutionContext,

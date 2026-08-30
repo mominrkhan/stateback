@@ -7,7 +7,7 @@ import { Timestamp } from "../../components/Timestamp";
 import { actionLabel, providerLabel, requesterLabel } from "../../presentation/labels";
 
 function resourceLabel(operation: Operation): string | null {
-  if (operation.intent.effect.provider !== "github" || operation.intent.effect.action !== "create_issue") return null;
+  if (operation.intent.effect.provider !== "github") return null;
   const argumentsValue = operation.intent.arguments;
   if (typeof argumentsValue !== "object" || argumentsValue === null || Array.isArray(argumentsValue)) return null;
   const owner = argumentsValue.owner;

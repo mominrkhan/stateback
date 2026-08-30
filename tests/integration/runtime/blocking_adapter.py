@@ -31,6 +31,11 @@ class BlockingAdapter:
     def validate_execution(self, request: ProviderExecutionRequest) -> ValidationResult:
         return self._inner.validate_execution(request)
 
+    def verification_resource_ids(
+        self, request: ProviderExecutionRequest
+    ) -> tuple[str, ...]:
+        return self._inner.verification_resource_ids(request)
+
     def execute(
         self,
         context: ProviderExecutionContext,

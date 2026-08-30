@@ -108,6 +108,7 @@ def test_completed_attempt_preserves_ids_and_started_at() -> None:
         attempt_number=1,
         started_at=TS,
         provider_idempotency_key="k",
+        external_resource_ids=("target-1",),
         correlation_id="c1",
     )
     evidence = ExecutionEvidence(
@@ -130,3 +131,4 @@ def test_completed_attempt_preserves_ids_and_started_at() -> None:
     assert completed.state is AttemptState.COMPLETED
     assert completed.outcome is EffectOutcome.APPLIED
     assert completed.external_operation_id == "ext-1"
+    assert completed.external_resource_ids == ("target-1", "res-1")
