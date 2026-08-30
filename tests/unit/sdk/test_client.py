@@ -39,6 +39,7 @@ def test_submit_preserves_idempotency_and_returns_handle() -> None:
         idempotency_key="request-1",
     )
     assert handle.operation_id == str(operation().operation_id)
+    assert handle.initial_status.state == "READY"
     assert seen[0].headers["idempotency-key"] == "request-1"
     assert b"safe-token" not in seen[0].content
     client.close()

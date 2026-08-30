@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import asyncio
+import json
 from pathlib import Path
 from typing import cast
 
+import httpx
 import pytest
+from mcp.server.mcpserver.exceptions import ToolError
 from pydantic import ValidationError
 
 from stateback.application import ApplicationService
@@ -11,7 +15,13 @@ from stateback.application.auth import AuthenticatedIdentity
 from stateback.application.models import SubmitOperationRequest
 from stateback.domain.exceptions import ContractValidationError
 from stateback.domain.operation import Operation
-from stateback.mcp import StatebackMcpTools, create_mcp_server
+from stateback.mcp import (
+    ApiMcpTools,
+    StatebackMcpTools,
+    create_api_mcp_server,
+    create_mcp_server,
+)
+from stateback.sdk import StatebackClient, StatebackTransportError
 from tests.unit.application.fixtures import IDENTITY, operation
 
 pytestmark = [pytest.mark.unit, pytest.mark.benchmark_correctness]
@@ -147,3 +157,173 @@ def test_mcp_source_has_no_provider_or_shell_bypass() -> None:
     assert "stateback.providers" not in source
     assert "subprocess" not in source
     assert "os.system" not in source
+
+
+def test_api_mcp_server_exposes_typed_v01_workflow_tools() -> None:
+    server = create_api_mcp_server(cast(StatebackClient, object()))
+    tools = asyncio.run(server.list_tools())
+    names = {tool.name for tool in tools}
+    assert names == {
+        "stateback_github_create_issue",
+        "stateback_github_create_issue_comment",
+        "stateback_github_add_label",
+        "stateback_github_create_pull_request",
+        "stateback_github_merge_pull_request",
+        "stateback_operation_status",
+        "stateback_operation_audit",
+    }
+    merge = next(
+        tool for tool in tools if tool.name == "stateback_github_merge_pull_request"
+    )
+    assert "approval-gated" in (merge.description or "")
+    assert "idempotency_key" in merge.input_schema["required"]
+    assert merge.input_schema["properties"]["idempotency_key"]["minLength"] == 1
+    assert merge.input_schema["properties"]["idempotency_key"]["maxLength"] == 200
+    assert merge.input_schema["properties"]["pull_number"]["exclusiveMinimum"] == 0
+    assert merge.input_schema["properties"]["head_sha"]["pattern"] == (
+        "^[0-9a-fA-F]{40}$"
+    )
+    assert merge.input_schema["properties"]["merge_method"]["enum"] == [
+        "merge",
+        "squash",
+        "rebase",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("tool_name", "arguments"),
+    [
+        (
+            "stateback_github_create_issue_comment",
+            {
+                "owner": "acme",
+                "repo": "sandbox",
+                "issue_number": 0,
+                "body": "note",
+                "idempotency_key": "comment-0",
+            },
+        ),
+        (
+            "stateback_github_merge_pull_request",
+            {
+                "owner": "acme",
+                "repo": "sandbox",
+                "pull_number": 17,
+                "head_sha": "not-a-sha",
+                "idempotency_key": "merge-bad-sha",
+            },
+        ),
+        (
+            "stateback_github_merge_pull_request",
+            {
+                "owner": "acme",
+                "repo": "sandbox",
+                "pull_number": 17,
+                "head_sha": "a" * 40,
+                "merge_method": "force",
+                "idempotency_key": "merge-bad-method",
+            },
+        ),
+    ],
+)
+def test_api_mcp_rejects_invalid_provider_arguments_before_api_submission(
+    tool_name: str, arguments: dict[str, object]
+) -> None:
+    class NoSubmissionClient:
+        def submit(self, **_kwargs: object) -> object:
+            raise AssertionError("invalid MCP input reached API submission")
+
+    server = create_api_mcp_server(cast(StatebackClient, NoSubmissionClient()))
+    with pytest.raises(ToolError, match="validation error"):
+        asyncio.run(server.call_tool(tool_name, arguments))
+
+
+def _api_response(payload: object, status: int = 200) -> httpx.Response:
+    return httpx.Response(status, content=json.dumps(payload).encode())
+
+
+def test_api_mcp_execution_reports_canonical_approval_state_and_payload() -> None:
+    seen: list[httpx.Request] = []
+    payload = operation().to_wire()
+    payload["state"] = "AWAITING_APPROVAL"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return _api_response(payload, 202)
+
+    client = StatebackClient(
+        base_url="https://stateback.test",
+        token="safe-token",
+        transport=httpx.MockTransport(handler),
+    )
+    tools = ApiMcpTools(client)
+    result = tools.submit_github(
+        "merge_pull_request",
+        {
+            "owner": "acme",
+            "repo": "sandbox",
+            "pull_number": 17,
+            "head_sha": "a" * 40,
+            "merge_method": "squash",
+        },
+        "merge-17",
+    )
+    assert result["state"] == "AWAITING_APPROVAL"
+    assert result["provider_outcome"] == "NOT_ESTABLISHED"
+    submitted = json.loads(seen[0].content)
+    assert submitted["effect"] == {
+        "provider": "github",
+        "action": "merge_pull_request",
+        "version": "v1",
+    }
+    assert "approval" not in submitted and "execute" not in submitted
+    client.close()
+
+
+def test_api_mcp_status_and_audit_preserve_unknown_and_ordered_evidence() -> None:
+    operation_payload = operation().to_wire()
+    operation_payload["state"] = "UNKNOWN"
+    audit_payload = {
+        "contract_version": "v1",
+        "items": [{"sequence": 1, "event_type": "EXECUTION_UNKNOWN"}],
+        "next_after_sequence": None,
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return _api_response(
+            audit_payload if request.url.path.endswith("/audit") else operation_payload
+        )
+
+    client = StatebackClient(
+        base_url="https://stateback.test",
+        token="safe-token",
+        transport=httpx.MockTransport(handler),
+    )
+    tools = ApiMcpTools(client)
+    operation_id = str(operation().operation_id)
+    assert tools.status(operation_id)["state"] == "UNKNOWN"
+    assert tools.audit(operation_id)["items"] == audit_payload["items"]
+    client.close()
+
+
+def test_api_mcp_transport_failure_is_not_reported_as_operation_state() -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("offline")
+
+    client = StatebackClient(
+        base_url="https://stateback.test",
+        token="safe-token",
+        transport=httpx.MockTransport(handler),
+    )
+    with pytest.raises(StatebackTransportError, match="transport_failed"):
+        ApiMcpTools(client).submit_github(
+            "add_label",
+            {
+                "owner": "acme",
+                "repo": "sandbox",
+                "issue_number": 42,
+                "label": "safe",
+            },
+            "label-42",
+        )
+    client.close()

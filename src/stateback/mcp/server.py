@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Annotated, Any, Literal
 
 from mcp.server import MCPServer
 from pydantic import BaseModel, ConfigDict, Field
@@ -13,6 +13,13 @@ from stateback.application.models import SubmitOperationRequest
 from stateback.application.service import ApplicationService
 from stateback.domain.ids import OpaqueId
 from stateback.domain.refs import EffectRef
+from stateback.sdk import StatebackClient
+
+IdempotencyKey = Annotated[str, Field(min_length=1, max_length=200)]
+ProviderName = Annotated[str, Field(min_length=1, max_length=100)]
+PositiveNumber = Annotated[int, Field(gt=0)]
+HeadSha = Annotated[str, Field(pattern=r"^[0-9a-fA-F]{40}$")]
+MergeMethod = Literal["merge", "squash", "rebase"]
 
 
 class _StrictInput(BaseModel):
@@ -70,6 +77,39 @@ class StatebackMcpTools:
             after_sequence=after_sequence,
             limit=limit,
         ).to_wire()
+
+
+class ApiMcpTools:
+    """Testable public-API MCP logic; never interprets transport failure as state."""
+
+    def __init__(self, client: StatebackClient) -> None:
+        self._client = client
+
+    def submit_github(
+        self, action: str, arguments: dict[str, object], key: str
+    ) -> dict[str, object]:
+        handle = self._client.submit(
+            effect={"provider": "github", "action": action, "version": "v1"},
+            arguments=arguments,
+            idempotency_key=key,
+        )
+        return {
+            "operation_id": handle.operation_id,
+            "state": handle.initial_status.state,
+            "accepted": True,
+            "provider_outcome": "NOT_ESTABLISHED",
+            "next": "Call stateback_operation_status for durable outcome.",
+        }
+
+    def status(self, operation_id: str) -> dict[str, object]:
+        return dict(self._client.get_operation(operation_id).raw)
+
+    def audit(
+        self, operation_id: str, *, after_sequence: int = 0, limit: int = 50
+    ) -> dict[str, object]:
+        return self._client.get_audit(
+            operation_id, after_sequence=after_sequence, limit=limit
+        )
 
 
 def create_mcp_server(
@@ -131,5 +171,158 @@ def create_mcp_server(
         operation_id: str, after_sequence: int = 0, limit: int = 50
     ) -> dict[str, object]:
         return tools.audit(operation_id, after_sequence, limit)
+
+    return server
+
+
+def create_api_mcp_server(client: StatebackClient) -> MCPServer[None]:
+    """Create the installed stdio server backed only by the public Stateback API."""
+
+    tools = ApiMcpTools(client)
+    server: MCPServer[None] = MCPServer(
+        "stateback",
+        version="v1",
+        instructions=(
+            "Each mutating tool submits a durable Stateback operation through policy. "
+            "Acceptance does not prove the provider action succeeded. Use the status "
+            "and audit tools to observe final, pending, or UNKNOWN outcomes."
+        ),
+    )
+
+    def submit(
+        action: str, arguments: dict[str, object], key: str
+    ) -> dict[str, object]:
+        return tools.submit_github(action, arguments, key)
+
+    @server.tool(
+        name="stateback_github_create_issue",
+        description="Submit a durable GitHub issue operation. Acceptance is not provider success; check operation status.",
+        structured_output=True,
+    )
+    def create_issue(
+        owner: ProviderName,
+        repo: ProviderName,
+        title: str,
+        idempotency_key: IdempotencyKey,
+        body: str = "",
+    ) -> dict[str, object]:
+        return submit(
+            "create_issue",
+            {"owner": owner, "repo": repo, "title": title, "body": body},
+            idempotency_key,
+        )
+
+    @server.tool(
+        name="stateback_github_create_issue_comment",
+        description="Submit a durable GitHub issue-comment operation. Acceptance is not provider success; check operation status.",
+        structured_output=True,
+    )
+    def create_issue_comment(
+        owner: ProviderName,
+        repo: ProviderName,
+        issue_number: PositiveNumber,
+        body: str,
+        idempotency_key: IdempotencyKey,
+    ) -> dict[str, object]:
+        return submit(
+            "create_issue_comment",
+            {"owner": owner, "repo": repo, "issue_number": issue_number, "body": body},
+            idempotency_key,
+        )
+
+    @server.tool(
+        name="stateback_github_add_label",
+        description="Submit a durable GitHub label operation. Acceptance is not provider success; check operation status.",
+        structured_output=True,
+    )
+    def add_label(
+        owner: ProviderName,
+        repo: ProviderName,
+        issue_number: PositiveNumber,
+        label: str,
+        idempotency_key: IdempotencyKey,
+    ) -> dict[str, object]:
+        return submit(
+            "add_label",
+            {
+                "owner": owner,
+                "repo": repo,
+                "issue_number": issue_number,
+                "label": label,
+            },
+            idempotency_key,
+        )
+
+    @server.tool(
+        name="stateback_github_create_pull_request",
+        description="Submit a durable GitHub pull-request operation. Acceptance is not provider success; check operation status.",
+        structured_output=True,
+    )
+    def create_pull_request(
+        owner: ProviderName,
+        repo: ProviderName,
+        head: str,
+        base: str,
+        title: str,
+        idempotency_key: IdempotencyKey,
+        body: str = "",
+        draft: bool = False,
+    ) -> dict[str, object]:
+        return submit(
+            "create_pull_request",
+            {
+                "owner": owner,
+                "repo": repo,
+                "head": head,
+                "base": base,
+                "title": title,
+                "body": body,
+                "draft": draft,
+            },
+            idempotency_key,
+        )
+
+    @server.tool(
+        name="stateback_github_merge_pull_request",
+        description="Submit an approval-gated durable GitHub merge bound to an expected head SHA. Acceptance is not provider success; check operation status.",
+        structured_output=True,
+    )
+    def merge_pull_request(
+        owner: ProviderName,
+        repo: ProviderName,
+        pull_number: PositiveNumber,
+        head_sha: HeadSha,
+        idempotency_key: IdempotencyKey,
+        merge_method: MergeMethod = "merge",
+    ) -> dict[str, object]:
+        return submit(
+            "merge_pull_request",
+            {
+                "owner": owner,
+                "repo": repo,
+                "pull_number": pull_number,
+                "head_sha": head_sha,
+                "merge_method": merge_method,
+            },
+            idempotency_key,
+        )
+
+    @server.tool(
+        name="stateback_operation_status",
+        description="Read canonical durable operation status, including UNKNOWN and approval states.",
+        structured_output=True,
+    )
+    def operation_status(operation_id: str) -> dict[str, object]:
+        return tools.status(operation_id)
+
+    @server.tool(
+        name="stateback_operation_audit",
+        description="Read ordered durable operation audit evidence without causing an external effect.",
+        structured_output=True,
+    )
+    def operation_audit(
+        operation_id: str, after_sequence: int = 0, limit: int = 50
+    ) -> dict[str, object]:
+        return tools.audit(operation_id, after_sequence=after_sequence, limit=limit)
 
     return server

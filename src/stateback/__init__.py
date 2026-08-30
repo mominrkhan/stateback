@@ -1,8 +1,7 @@
-"""Stateback package root.
+"""Public Stateback SDK entry points. Importing this module has no side effects."""
 
-Phase 7 adds compensation (`stateback.compensation`) as a first-class side
-effect on top of Phases 1-6. This module MUST NOT open sockets, connect to
-PostgreSQL, or import runtime/policy/providers/recovery/compensation.
-"""
+from stateback.sdk import AsyncStateback, Stateback
 
 __version__ = "0.1.0"
+
+__all__ = ["AsyncStateback", "Stateback", "__version__"]

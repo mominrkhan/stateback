@@ -1,8 +1,8 @@
-"""Synchronous typed client; transport failures never become operation states."""
+"""Async typed client with cancellation-safe polling."""
 
 from __future__ import annotations
 
-import threading
+import asyncio
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -10,109 +10,74 @@ from typing import Any
 
 import httpx
 
+from stateback.sdk.client import (
+    StatebackTransportError,
+    client_error_from_response,
+    operation_status_from_payload,
+)
 from stateback.sdk.models import OperationStatus, WaitOutcome, WaitResult
 
 
-class StatebackClientError(Exception):
-    def __init__(self, code: str, *, status_code: int, retryable: bool) -> None:
-        super().__init__(code)
-        self.code = code
-        self.status_code = status_code
-        self.retryable = retryable
-
-
-class StatebackTransportError(Exception):
-    """No durable operation conclusion can be inferred from this exception."""
-
-
-def operation_status_from_payload(payload: object) -> OperationStatus:
-    try:
-        return OperationStatus.from_wire(payload)
-    except ValueError as exc:
-        raise StatebackTransportError("malformed_response") from exc
-
-
-def client_error_from_response(response: httpx.Response) -> StatebackClientError:
-    try:
-        body = response.json()
-        error = body["error"]
-        code = error["code"]
-        retryable = error["retryable"]
-        if not isinstance(code, str) or not isinstance(retryable, bool):
-            raise TypeError
-    except (ValueError, KeyError, TypeError) as exc:
-        raise StatebackTransportError("malformed_error_response") from exc
-    return StatebackClientError(
-        code, status_code=response.status_code, retryable=retryable
-    )
-
-
 @dataclass(frozen=True, slots=True)
-class OperationHandle:
-    _client: StatebackClient
+class AsyncOperationHandle:
+    _client: AsyncStatebackClient
     operation_id: str
     initial_status: OperationStatus
 
-    def status(self) -> OperationStatus:
-        return self._client.get_operation(self.operation_id)
+    async def status(self) -> OperationStatus:
+        return await self._client.get_operation(self.operation_id)
 
-    def audit(self, *, after_sequence: int = 0, limit: int = 50) -> dict[str, Any]:
-        return self._client.get_audit(
+    async def audit(
+        self, *, after_sequence: int = 0, limit: int = 50
+    ) -> dict[str, Any]:
+        return await self._client.get_audit(
             self.operation_id, after_sequence=after_sequence, limit=limit
         )
 
-    def wait(
-        self,
-        *,
-        timeout: float,
-        poll_interval: float = 0.25,
-        cancel: threading.Event | None = None,
-    ) -> WaitResult:
+    async def wait(self, *, timeout: float, poll_interval: float = 0.25) -> WaitResult:
         if timeout < 0 or poll_interval <= 0:
             raise ValueError("timeout must be >= 0 and poll_interval must be > 0")
         deadline = time.monotonic() + timeout
         delay = poll_interval
-        current = self.status()
+        current = await self.status()
         while not current.is_forward_terminal:
-            if cancel is not None and cancel.is_set():
-                return WaitResult(outcome=WaitOutcome.CANCELLED, operation=current)
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 return WaitResult(outcome=WaitOutcome.TIMED_OUT, operation=current)
-            time.sleep(min(delay, remaining))
-            current = self.status()
+            await asyncio.sleep(min(delay, remaining))
+            current = await self.status()
             delay = min(delay * 1.5, 5.0)
         return WaitResult(outcome=WaitOutcome.COMPLETED, operation=current)
 
 
-class StatebackClient:
+class AsyncStatebackClient:
     def __init__(
         self,
         *,
         base_url: str,
         token: str,
         timeout: float = 10.0,
-        transport: httpx.BaseTransport | None = None,
+        transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         if not token:
             raise ValueError("token must be non-empty")
-        self._http = httpx.Client(
+        self._http = httpx.AsyncClient(
             base_url=base_url,
             headers={"Authorization": f"Bearer {token}"},
             timeout=timeout,
             transport=transport,
         )
 
-    def close(self) -> None:
-        self._http.close()
+    async def close(self) -> None:
+        await self._http.aclose()
 
-    def __enter__(self) -> StatebackClient:
+    async def __aenter__(self) -> AsyncStatebackClient:
         return self
 
-    def __exit__(self, *_args: object) -> None:
-        self.close()
+    async def __aexit__(self, *_args: object) -> None:
+        await self.close()
 
-    def submit(
+    async def submit(
         self,
         *,
         effect: dict[str, str],
@@ -121,7 +86,7 @@ class StatebackClient:
         metadata: dict[str, str] | None = None,
         deployment_environment: str = "production",
         correlation_id: str | None = None,
-    ) -> OperationHandle:
+    ) -> AsyncOperationHandle:
         if not idempotency_key:
             raise ValueError(
                 "idempotency_key must be non-empty and stable across retries"
@@ -129,7 +94,7 @@ class StatebackClient:
         headers = {"Idempotency-Key": idempotency_key}
         if correlation_id is not None:
             headers["X-Correlation-ID"] = correlation_id
-        payload = self._request(
+        payload = await self._request(
             "POST",
             "/v1/operations",
             headers=headers,
@@ -141,18 +106,18 @@ class StatebackClient:
                 "deployment_environment": deployment_environment,
             },
         )
-        operation = self._operation_status(payload)
-        return OperationHandle(self, operation.operation_id, operation)
+        operation = operation_status_from_payload(payload)
+        return AsyncOperationHandle(self, operation.operation_id, operation)
 
-    def get_operation(self, operation_id: str) -> OperationStatus:
-        return self._operation_status(
-            self._request("GET", f"/v1/operations/{operation_id}")
+    async def get_operation(self, operation_id: str) -> OperationStatus:
+        return operation_status_from_payload(
+            await self._request("GET", f"/v1/operations/{operation_id}")
         )
 
-    def get_audit(
+    async def get_audit(
         self, operation_id: str, *, after_sequence: int = 0, limit: int = 50
     ) -> dict[str, Any]:
-        payload = self._request(
+        payload = await self._request(
             "GET",
             f"/v1/operations/{operation_id}/audit",
             params={"after_sequence": after_sequence, "limit": limit},
@@ -161,7 +126,7 @@ class StatebackClient:
             raise StatebackTransportError("malformed_response")
         return payload
 
-    def _request(
+    async def _request(
         self,
         method: str,
         path: str,
@@ -171,7 +136,7 @@ class StatebackClient:
         params: Mapping[str, str | int] | None = None,
     ) -> object:
         try:
-            response = self._http.request(
+            response = await self._http.request(
                 method, path, headers=headers, json=json, params=params
             )
         except httpx.HTTPError as exc:
@@ -182,7 +147,3 @@ class StatebackClient:
             except ValueError as exc:
                 raise StatebackTransportError("malformed_response") from exc
         raise client_error_from_response(response)
-
-    @staticmethod
-    def _operation_status(payload: object) -> OperationStatus:
-        return operation_status_from_payload(payload)
