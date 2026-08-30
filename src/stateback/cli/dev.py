@@ -91,7 +91,9 @@ class LocalRuntimeSupervisor:
         await self._supervisor.wait_for_marker(relay, marker)
 
     async def start_worker(self, environment: Mapping[str, str], marker: Path) -> None:
-        worker = await self._supervisor.start("worker", environment)
+        worker = await self._supervisor.start(
+            "worker", environment, command="_dev-worker"
+        )
         await self._supervisor.wait_for_marker(worker, marker)
 
     async def supervise(self, stop: asyncio.Event) -> None:
@@ -378,6 +380,9 @@ async def run_dev(
 
             worker_env = dict(runtime_env)
             worker_marker = run_directory / "worker.ready"
+            demo_arm_directory = run_directory / "demo-unknown"
+            demo_arm_directory.mkdir(mode=0o700, exist_ok=True)
+            worker_env["STATEBACK_DEMO_UNKNOWN_ARM_DIRECTORY"] = str(demo_arm_directory)
             worker_env["STATEBACK_READINESS_PATH"] = str(worker_marker)
             if config.github_enabled:
                 worker_env["STATEBACK_GITHUB_TOKEN_FILE"] = str(

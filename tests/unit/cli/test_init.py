@@ -29,6 +29,13 @@ def test_fresh_initialization_is_safe_and_default_deny(tmp_path: Path) -> None:
     assert (tmp_path / ".stateback/.gitignore").read_text() == "*\n!.gitignore\n"
     policy = json.loads((tmp_path / "stateback.policy.json").read_text())
     assert policy["rules"][0]["verdict"] == "REQUIRE_APPROVAL"
+    assert set(policy["rules"][0]["actions"]) == {
+        "create_issue",
+        "create_issue_comment",
+        "add_label",
+        "create_pull_request",
+        "merge_pull_request",
+    }
     assert len(policy["rules"]) == 1
 
     auth = json.loads((tmp_path / ".stateback/auth.json").read_text())
@@ -106,3 +113,47 @@ def test_symlinked_state_directory_is_rejected(tmp_path: Path) -> None:
 
     with pytest.raises(ProjectFileError, match="unsafe project directory"):
         initialize(tmp_path)
+
+
+def test_mcp_help_and_config_are_public_without_credentials(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(sys, "argv", ["stateback", "mcp", "--print-config"])
+    main()
+    assert json.loads(capsys.readouterr().out) == {
+        "command": "stateback",
+        "args": ["mcp"],
+    }
+
+
+def test_mcp_command_starts_authenticated_stdio_and_closes_client(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed: dict[str, object] = {}
+
+    class FakeClient:
+        def __init__(self, *, base_url: str, token: str) -> None:
+            observed["client"] = (base_url, token)
+
+        def close(self) -> None:
+            observed["closed"] = True
+
+    class FakeServer:
+        def run(self, transport: str) -> None:
+            observed["transport"] = transport
+
+    monkeypatch.setenv("STATEBACK_API_URL", "https://stateback.test")
+    monkeypatch.setenv("STATEBACK_API_TOKEN", "caller-token")
+    monkeypatch.setattr("stateback.cli.mcp.StatebackClient", FakeClient)
+    monkeypatch.setattr(
+        "stateback.cli.mcp.create_api_mcp_server", lambda _client: FakeServer()
+    )
+    monkeypatch.setattr(sys, "argv", ["stateback", "mcp"])
+
+    main()
+
+    assert observed == {
+        "client": ("https://stateback.test", "caller-token"),
+        "transport": "stdio",
+        "closed": True,
+    }

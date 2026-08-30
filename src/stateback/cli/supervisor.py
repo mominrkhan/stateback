@@ -31,7 +31,9 @@ class ProcessSupervisor:
         self._show_output = show_output
         self._children: list[Child] = []
 
-    async def start(self, name: str, environment: Mapping[str, str]) -> Child:
+    async def start(
+        self, name: str, environment: Mapping[str, str], *, command: str | None = None
+    ) -> Child:
         log_path = self._log_directory / f"{name}.log"
         backup = log_path.with_suffix(".log.1")
         if log_path.exists() and log_path.stat().st_size >= _MAX_LOG_BYTES:
@@ -41,7 +43,7 @@ class ProcessSupervisor:
             sys.executable,
             "-m",
             "stateback.cli.main",
-            name,
+            command or name,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
             env=dict(environment),

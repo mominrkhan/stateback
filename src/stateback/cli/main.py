@@ -11,8 +11,10 @@ from pathlib import Path
 from stateback import __version__
 from stateback.cli.config import ProjectConfigError
 from stateback.cli.connect import connect_github
+from stateback.cli.demo import DemoError, run_unknown_demo
 from stateback.cli.dev import DevError, run_dev
 from stateback.cli.init import initialize
+from stateback.cli.mcp import run_mcp
 from stateback.cli.project import ProjectFileError
 from stateback.deployment.processes import PROCESS_NAMES, run_process
 
@@ -38,6 +40,19 @@ def _parser() -> argparse.ArgumentParser:
     connect = commands.add_parser("connect", help="connect a provider")
     connect.add_argument("provider", choices=("github",))
 
+    mcp = commands.add_parser("mcp", help="run the Stateback MCP server over stdio")
+    mcp.add_argument(
+        "--print-config",
+        action="store_true",
+        help="print a generic stdio config fragment",
+    )
+
+    demo = commands.add_parser("demo", help="run an explicit Stateback product demo")
+    demo.add_argument("scenario", choices=("unknown",))
+    demo.add_argument("--owner", required=True)
+    demo.add_argument("--repo", required=True)
+    demo.add_argument("--confirm-mutation", action="store_true")
+
     descriptions = {
         "api": "run the API process (advanced)",
         "relay": "run the outbox relay (advanced)",
@@ -51,6 +66,7 @@ def _parser() -> argparse.ArgumentParser:
     }
     for process in PROCESS_NAMES:
         commands.add_parser(process, help=descriptions[process])
+    commands.add_parser("_dev-worker", help=argparse.SUPPRESS)
     return parser
 
 
@@ -110,9 +126,25 @@ def main() -> None:
         if args.command == "connect":
             _connect_github()
             return
+        if args.command == "mcp":
+            run_mcp(print_config=args.print_config)
+            return
+        if args.command == "demo":
+            run_unknown_demo(
+                owner=args.owner,
+                repo=args.repo,
+                confirm_mutation=args.confirm_mutation,
+            )
+            return
+        if args.command == "_dev-worker":
+            from stateback.deployment.processes import run_worker
+
+            asyncio.run(run_worker(development=True))
+            return
         run_process(args.command)
     except (
         DevError,
+        DemoError,
         ProjectConfigError,
         ProjectFileError,
         RuntimeError,

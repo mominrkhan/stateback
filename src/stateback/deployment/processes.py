@@ -523,10 +523,22 @@ async def run_relay() -> None:
         await client.drain()
 
 
-async def run_worker() -> None:
+async def run_worker(*, development: bool = False) -> None:
     marker = readiness_path()
     marker.unlink(missing_ok=True)
-    services = build_services(require_auth=False, execute_providers=True)
+    demo_directory = None
+    if development:
+        raw_demo_directory = os.environ.get("STATEBACK_DEMO_UNKNOWN_ARM_DIRECTORY")
+        if raw_demo_directory is None:
+            raise RuntimeError("local demo arm directory is required")
+        demo_directory = Path(raw_demo_directory)
+        if not demo_directory.is_dir() or demo_directory.is_symlink():
+            raise RuntimeError("local demo arm directory is unsafe")
+    services = build_services(
+        require_auth=False,
+        execute_providers=True,
+        development_demo_arm_directory=demo_directory,
+    )
     max_deliveries = positive_int_env("STATEBACK_WORKER_MAX_DELIVERIES", 5, maximum=100)
     handler = WorkHandler(
         session_factory=services.session_factory,

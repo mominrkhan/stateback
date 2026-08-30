@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from pathlib import Path
 
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -18,6 +19,7 @@ from stateback.deployment.config import (
 )
 from stateback.persistence import create_engine_from_env, session_factory
 from stateback.providers.github import GitHubAdapter
+from stateback.providers.github.demo_fault import OperationScopedLostResponseAdapter
 from stateback.providers.registry import CapabilityRegistry
 from stateback.recovery import RecoveryService
 from stateback.runtime import SynchronousRuntime
@@ -62,7 +64,12 @@ def _semantic_service() -> AuditSummaryService | None:
     return AuditSummaryService(semantic_model=model_client)
 
 
-def build_services(*, require_auth: bool, execute_providers: bool) -> Services:
+def build_services(
+    *,
+    require_auth: bool,
+    execute_providers: bool,
+    development_demo_arm_directory: Path | None = None,
+) -> Services:
     clock = SystemClock()
     factory = session_factory(create_engine_from_env())
     policy = load_policy()
@@ -79,7 +86,16 @@ def build_services(*, require_auth: bool, execute_providers: bool) -> Services:
     if execute_providers:
         github_token = read_secret_file("STATEBACK_GITHUB_TOKEN_FILE")
         github_configured = github_token is not None and bool(github_token.strip())
-        github = GitHubAdapter.from_token(token=github_token, clock=clock)
+        github_adapter = GitHubAdapter.from_token(token=github_token, clock=clock)
+        github = (
+            github_adapter
+            if development_demo_arm_directory is None
+            else OperationScopedLostResponseAdapter(
+                delegate=github_adapter,
+                arm_directory=development_demo_arm_directory,
+                clock=clock,
+            )
+        )
     else:
         github_configured = boolean_env("STATEBACK_GITHUB_CONFIGURED")
         github = GitHubAdapter.for_validation(

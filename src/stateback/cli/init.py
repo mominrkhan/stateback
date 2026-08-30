@@ -64,10 +64,16 @@ def _policy() -> bytes:
         "revision": "local-development-v1",
         "rules": [
             {
-                "rule_id": "github-create-issue-requires-approval",
+                "rule_id": "github-v01-workflow-requires-approval",
                 "verdict": "REQUIRE_APPROVAL",
                 "providers": ["github"],
-                "actions": ["create_issue"],
+                "actions": [
+                    "create_issue",
+                    "create_issue_comment",
+                    "add_label",
+                    "create_pull_request",
+                    "merge_pull_request",
+                ],
                 "versions": ["v1"],
                 "obligations": {
                     "require_verification": False,
