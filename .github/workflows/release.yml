@@ -46,6 +46,7 @@ jobs:
           uv run ruff format --check .
           uv run mypy src tests
           uv run pytest -m unit
+          uv run pytest -m contract
           docker compose up -d --wait
           uv run pytest -m integration
           uv run alembic upgrade head
@@ -53,7 +54,9 @@ jobs:
         run: |
           uv run python -m benchmarks.run correctness --output /tmp/release-correctness.json
           npm --prefix frontend ci
+          npx --prefix frontend playwright install --with-deps chromium
           npm --prefix frontend test -- --run
+          npm --prefix frontend run test:e2e -- --project=chromium
           npm --prefix frontend run build
           (cd frontend/dist && find . -type f -print0 | sort -z | xargs -0 sha256sum) > /tmp/frontend-a.sha256
           npm --prefix frontend ci
@@ -85,7 +88,6 @@ jobs:
           (cd /tmp/docs-a && find . -type f -print0 | sort -z | xargs -0 sha256sum) > /tmp/docs-a.sha256
           (cd /tmp/docs-b && find . -type f -print0 | sort -z | xargs -0 sha256sum) > /tmp/docs-b.sha256
           diff --unified /tmp/docs-a.sha256 /tmp/docs-b.sha256
-          uv run python -m stateback.deployment.release_evidence --revision "$GITHUB_SHA"
       - name: Scan source, configuration, and secrets
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
@@ -343,3 +345,20 @@ jobs:
       - name: Deploy Pages
         id: deployment
         uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4.0.5
+
+  github-release:
+    needs: [publish-pypi, images, pages]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: python-distributions
+          path: dist
+      - name: Create checksums
+        run: sha256sum dist/* > SHA256SUMS
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/* SHA256SUMS --verify-tag --generate-notes --title "$GITHUB_REF_NAME"

@@ -2,6 +2,26 @@
 name = "stateback"
 version = "0.1.0"
 description = "Transactional safety for AI agent side effects."
+keywords = [
+    "ai-agents",
+    "distributed-systems",
+    "fault-tolerance",
+    "idempotency",
+    "recovery",
+    "transactions",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: System Administrators",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: MacOS",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: System :: Distributed Computing",
+]
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
@@ -16,6 +36,12 @@ dependencies = [
     "sqlalchemy==2.0.52",
     "uvicorn==0.41.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/mominrkhan/stateback"
+Repository = "https://github.com/mominrkhan/stateback"
+Documentation = "https://github.com/mominrkhan/stateback/tree/main/docs"
+Issues = "https://github.com/mominrkhan/stateback/issues"
 
 [project.scripts]
 stateback = "stateback.cli.main:main"
@@ -81,9 +107,9 @@ markers = [
     "integration: tests that require local PostgreSQL or NATS",
     "postgres: tests that require PostgreSQL",
     "nats: tests that require NATS JetStream",
-    "failure: reserved for later phases; do not use in Phase 2",
+    "failure: deterministic failure-model and crash-boundary tests",
     "contract: canonical contract serialization and enum tests",
     "github_sandbox: opt-in tests that mutate an isolated GitHub repository",
-    "benchmark_correctness: deterministic Phase 17 correctness evidence",
-    "benchmark_performance: reproducible Phase 17 performance measurements",
+    "benchmark_correctness: deterministic benchmark correctness evidence",
+    "benchmark_performance: reproducible benchmark performance measurements",
 ]

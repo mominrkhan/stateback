@@ -39,6 +39,8 @@ jobs:
         run: uv run mypy src tests
       - name: Unit tests
         run: uv run pytest -m unit
+      - name: Provider and public contract tests
+        run: uv run pytest -m contract
       - name: Whitespace
         run: git diff --check
 
@@ -84,9 +86,12 @@ jobs:
       - name: Install frontend dependencies
         working-directory: frontend
         run: npm ci
+      - name: Install Playwright Chromium
+        working-directory: frontend
+        run: npx playwright install --with-deps chromium
       - name: Test and build frontend
         working-directory: frontend
-        run: npm test -- --run && npm run build
+        run: npm test -- --run && npm run test:e2e -- --project=chromium && npm run build
       - name: Bundle Operator UI in Python package
         run: |
           rm -rf src/stateback/operator_ui/static

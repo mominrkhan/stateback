@@ -1,11 +1,13 @@
 # Presentation/export artifacts from wiki operations. Wiki markdown stays committed.
 outputs/*.pdf
+.DS_Store
 
 # Local secrets. Never commit.
 .env
 .env.local
 .env.development
 .env.production
+.cursor/mcp.json
 
 # Python
 .venv/
@@ -22,4 +24,5 @@ node_modules/
 .pytest_cache/
 .coverage
 htmlcov/
+site/
 .tox/

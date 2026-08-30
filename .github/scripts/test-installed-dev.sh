@@ -24,6 +24,9 @@ project="$test_root/project"
 mkdir "$project"
 python3.12 -m venv "$venv"
 "$venv/bin/pip" install --quiet "$wheel"
+"$venv/bin/stateback" --help >/dev/null
+"$venv/bin/stateback" mcp --help >/dev/null
+"$venv/bin/python" -c 'from stateback import Stateback; print(Stateback)' >/dev/null
 cd "$project"
 "$venv/bin/stateback" init --json > "$test_root/init-first.json"
 cp .stateback/auth.json "$test_root/auth-before.json"
@@ -101,6 +104,7 @@ start_dev "$test_root/dev-first.log"
 [[ -f .stateback/run/auth.json ]]
 curl --silent --show-error --fail "http://127.0.0.1:$api_port/health/ready" >/dev/null
 curl --silent --show-error --fail "http://127.0.0.1:$api_port/" | grep -q "Stateback Operator"
+"$venv/bin/python" -c 'from stateback import Stateback; client = Stateback.local(); client.close()'
 postgres_id=$(docker ps -q \
   --filter "label=com.docker.compose.project=$compose_project" \
   --filter "label=com.docker.compose.service=postgres")
