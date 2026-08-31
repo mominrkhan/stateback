@@ -1,11 +1,14 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useMemo, useState } from "react";
 
 import type { OperatorClient } from "../api/client";
+import { queryRead } from "../api/queryRead";
 import type { ActionKey, Reconstruction } from "../api/types";
 import { ActionGate, ACTION_LABELS } from "../components/ActionGate";
 import { CommandOutcome, type CommandOutcomeKind } from "../components/CommandOutcome";
 import { ConfirmationDialog } from "../components/ConfirmationDialog";
 import { DefensiveState } from "../components/DefensiveState";
+import { Skeleton } from "../components/Skeleton";
 import { OperatorReasonField, validateOperatorReason } from "../components/OperatorReasonField";
 import { CommandController, type CommandState } from "../features/commands/commandController";
 import { sessionCommandAttempts } from "../features/commands/attemptRegistry";
@@ -17,6 +20,7 @@ interface OperationDetailRouteProps {
   client: OperatorClient;
   operationId: string;
   session: AuthSessionValue;
+  navigate: (href: string) => void;
 }
 
 function outcomeKind(state: CommandState): CommandOutcomeKind {
@@ -40,59 +44,43 @@ function consequence(action: ActionKey): string {
   return "Compensation is another side effect. It may fail or become unknown and never erases original history.";
 }
 
-export function OperationDetailRoute({ client, operationId, session }: OperationDetailRouteProps) {
+export function OperationDetailRoute({ client, operationId, session, navigate }: OperationDetailRouteProps) {
   const controller = useMemo(
     () => new CommandController(client, { registry: sessionCommandAttempts }),
     [client],
   );
-  const activeRead = useRef<AbortController | null>(null);
-  const readGeneration = useRef(0);
-  const [detail, setDetail] = useState<Reconstruction | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const queryClient = useQueryClient();
+  const detailKey = ["operator", "operation", operationId] as const;
+  const detailQuery = useQuery({
+    queryKey: detailKey,
+    queryFn: ({ signal }) => queryRead(signal, session.createAbortController, session.releaseAbortController, (readSignal) => client.reconstruct(operationId, readSignal)),
+  });
+  const detail = detailQuery.data ?? null;
+  const [commandError, setCommandError] = useState<string | null>(null);
   const [action, setAction] = useState<ActionKey | null>(null);
   const [reason, setReason] = useState("");
   const [showValidation, setShowValidation] = useState(false);
   const [commandState, setCommandState] = useState<Readonly<CommandState>>(controller.state);
   const [abandonAcknowledged, setAbandonAcknowledged] = useState(false);
 
-  async function load() {
-    activeRead.current?.abort();
-    const request = session.createAbortController();
-    activeRead.current = request;
-    const generation = ++readGeneration.current;
-    const sessionGeneration = session.sessionGeneration;
-    setLoading(true);
-    setError(null);
-    try {
-      const reconstruction = await client.reconstruct(operationId, request.signal);
-      if (request.signal.aborted || generation !== readGeneration.current || !session.isCurrentGeneration(sessionGeneration)) return;
-      setDetail(reconstruction);
-    } catch (cause) {
-      if (request.signal.aborted || generation !== readGeneration.current || !session.isCurrentGeneration(sessionGeneration)) return;
-      setError(cause instanceof Error ? cause.message : "Unable to load operation reconstruction");
-    } finally {
-      if (generation === readGeneration.current) setLoading(false);
-      session.releaseAbortController(request);
-      if (activeRead.current === request) activeRead.current = null;
-    }
-  }
-
   useEffect(() => {
-    setDetail(null);
     setAction(null);
     setReason("");
-    void load();
-    return () => {
-      activeRead.current?.abort();
-      readGeneration.current += 1;
-    };
-  }, [client, operationId, session.sessionGeneration]);
+    setCommandError(null);
+  }, [operationId, session.sessionGeneration]);
 
   useEffect(() => controller.subscribe((state) => {
     setCommandState(state);
-    if (state.reconstruction) setDetail(state.reconstruction);
-  }), [controller]);
+    if (state.reconstruction) queryClient.setQueryData(detailKey, state.reconstruction);
+    if (state.phase === "accepted" || state.phase === "authoritative-reloaded" || state.phase === "conflict") {
+      void Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["operator", "operations"] }),
+        queryClient.invalidateQueries({ queryKey: ["operator", "approvals"] }),
+        queryClient.invalidateQueries({ queryKey: ["operator", "recovery"] }),
+        queryClient.invalidateQueries({ queryKey: ["operator", "overview"] }),
+      ]);
+    }
+  }), [controller, operationId, queryClient]);
 
   async function confirm() {
     if (!detail || !action) return;
@@ -110,12 +98,13 @@ export function OperationDetailRoute({ client, operationId, session }: Operation
       setShowValidation(false);
     } catch (cause) {
       setShowValidation(true);
-      setError(cause instanceof Error ? cause.message : "Unable to submit command");
+      setCommandError(cause instanceof Error ? cause.message : "Unable to submit command");
     }
   }
 
-  if (loading && !detail) return <section aria-labelledby="detail-loading-heading"><h1 id="detail-loading-heading" data-page-heading tabIndex={-1}>Operation detail</h1><DefensiveState kind="loading" title="Loading operation reconstruction" /></section>;
-  if (error && !detail) return <section aria-labelledby="detail-error-heading"><h1 id="detail-error-heading" data-page-heading tabIndex={-1}>Operation detail</h1><DefensiveState kind="error" title="Unable to load operation" onRetry={() => void load()}><p>{error}</p></DefensiveState></section>;
+  const readError = detailQuery.error instanceof Error ? detailQuery.error.message : detailQuery.error ? "Unable to load operation reconstruction" : null;
+  if (detailQuery.isPending && !detail) return <section aria-labelledby="detail-loading-heading"><h1 id="detail-loading-heading" data-page-heading tabIndex={-1}>Operation detail</h1><Skeleton variant="detail" label="Loading operation reconstruction" /></section>;
+  if (readError && !detail) return <section aria-labelledby="detail-error-heading"><h1 id="detail-error-heading" data-page-heading tabIndex={-1}>Operation detail</h1><DefensiveState kind="error" title="Unable to load operation" onRetry={() => void detailQuery.refetch()}><p>{readError}</p></DefensiveState></section>;
   if (!detail) return <section aria-labelledby="detail-unsupported-heading"><h1 id="detail-unsupported-heading" data-page-heading tabIndex={-1}>Operation detail</h1><DefensiveState kind="unsupported" title="Unsupported operation response" /></section>;
 
   const retained = controller.retained(detail.operation.operation_id);
@@ -166,11 +155,12 @@ export function OperationDetailRoute({ client, operationId, session }: Operation
 
   return (
     <>
-      {error && <p role="alert">{error}</p>}
+      {commandError && <p role="alert">{commandError}</p>}
       <OperationDetailPage
         reconstruction={detail}
         actions={actions}
         advisory={<AdvisorySummary client={client} operation={detail.operation} />}
+        onNavigate={navigate}
       />
       <ConfirmationDialog
         open={action !== null}

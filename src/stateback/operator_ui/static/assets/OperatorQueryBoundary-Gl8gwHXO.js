@@ -1,0 +1,1 @@
+import{A as e,I as t,M as n,R as r,k as i}from"./createLucideIcon-x-WjXb2D.js";import{t as a}from"./queryClient-BH7j_E0C.js";var o=r(t(),1),s=n();function c({children:t}){let n=(0,o.useContext)(i),[r]=(0,o.useState)(()=>new a({defaultOptions:{queries:{retry:!1,staleTime:15e3,refetchOnWindowFocus:!1}}}));return n?t:(0,s.jsx)(e,{client:r,children:t})}export{c as t};

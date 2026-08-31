@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { ShieldCheck } from "lucide-react";
 
 import type { ActionKey, Approval, Reconstruction } from "../../api/types";
 import { CommandOutcome, type CommandOutcomeKind } from "../../components/CommandOutcome";
@@ -7,6 +8,7 @@ import { CopyableId } from "../../components/CopyableId";
 import { OperatorReasonField, validateOperatorReason } from "../../components/OperatorReasonField";
 import { StateBadge } from "../../components/StateBadge";
 import { actionLabel, effectIdentifier, providerLabel, requesterLabel } from "../../presentation/labels";
+import { operationPresentation } from "../../presentation/operationPresentation";
 import { SummaryPanel } from "../detail/SummaryPanel";
 import type { CommandState } from "../commands/commandController";
 
@@ -87,16 +89,18 @@ export function ApprovalReview({
   const mergeMethod = typeof argumentsRecord?.merge_method === "string" ? argumentsRecord.merge_method : null;
   const policy = reconstruction.policy_decisions.find((decision) => decision.policy_decision_id === approval?.policy_decision_id) ?? reconstruction.policy_decisions.at(-1);
   const approveLabel = `Approve ${action.toLocaleLowerCase()}`;
+  const presentation = operationPresentation(operation);
 
   useEffect(() => setReviewingAbandonment(false), [operation.operation_id, commandState.phase]);
 
   return (
     <section aria-labelledby="approval-review-heading">
       <header>
+        <span className="approval-review__icon" aria-hidden="true"><ShieldCheck size={20} /></span>
         <p className="eyebrow">DECISION REQUIRED</p>
         <h2 id="approval-review-heading">{action}</h2>
-        <p>{provider}</p>
-        <StateBadge state={operation.state} />
+        <p>{provider}{presentation.primaryResource ? ` · ${presentation.primaryResource}` : ""}</p>
+        <div className="approval-review__badges"><StateBadge state={operation.state} /><span className={`risk-badge risk-badge--${operation.risk_level.toLowerCase()}`}>{operation.risk_level.toLocaleLowerCase()} risk</span></div>
       </header>
       <dl className="approval-context">
         <div><dt>Requested by</dt><dd>{requesterLabel(operation.intent.requester)}</dd></div>
@@ -108,6 +112,7 @@ export function ApprovalReview({
         {mergeMethod && <div><dt>Method</dt><dd>{mergeMethod}</dd></div>}
         <div><dt>Approval authorizes</dt><dd>{action} with {provider}</dd></div>
       </dl>
+      <section className="approval-rationale" aria-labelledby="approval-rationale-heading"><h3 id="approval-rationale-heading">Why approval is required</h3><p>{policy?.explanation ?? policy?.reason_codes.join(", ") ?? "Human approval is required by the active policy."}</p></section>
       <details className="technical-details"><summary>Technical approval binding</summary><dl><div><dt>Operation ID</dt><dd><CopyableId value={operation.operation_id} label="operation ID" /></dd></div><div><dt>Expected version</dt><dd>{operation.version}</dd></div><div><dt>Current approval ID</dt><dd>{approval ? <CopyableId value={approval.approval_id} label="approval ID" /> : "Not present"}</dd></div><div><dt>Intent digest</dt><dd><CopyableId value={operation.intent.intent_digest} label="intent digest" /></dd></div><div><dt>Effect</dt><dd><code>{effectIdentifier(operation.intent.effect)}</code></dd></div></dl><SummaryPanel reconstruction={reconstruction} /></details>
       <OperatorReasonField
         actionKey={dialogAction ?? allowed[0] ?? "approve"}

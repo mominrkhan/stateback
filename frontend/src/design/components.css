@@ -582,11 +582,6 @@
   background: var(--color-inset);
 }
 
-.approval-queue a[aria-current="true"] {
-  color: var(--color-bg);
-  background: var(--color-accent);
-}
-
 .approval-queue a[aria-disabled="true"] {
   pointer-events: none;
   opacity: var(--opacity-disabled);

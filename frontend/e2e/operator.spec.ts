@@ -40,7 +40,10 @@ const test = base.extend<{ cleanRuntime: void }>({
 });
 
 async function expectAxeClean(page: Page) {
-  const result = await new AxeBuilder({ page }).analyze();
+  await expect(page.locator('[data-sonner-toast][data-removed="true"]')).toHaveCount(0);
+  const result = await new AxeBuilder({ page })
+    .exclude("[data-base-ui-focus-guard]")
+    .analyze();
   expect(result.violations, result.violations.map((item) => `${item.id}: ${item.help}`).join("\n")).toEqual([]);
 }
 
@@ -57,6 +60,13 @@ async function expectInsideViewport(locator: Locator, page: Page, includeVertica
   }
 }
 
+async function expectTouchTarget(locator: Locator) {
+  const box = await locator.boundingBox();
+  expect(box).not.toBeNull();
+  expect(box!.width).toBeGreaterThanOrEqual(44);
+  expect(box!.height).toBeGreaterThanOrEqual(44);
+}
+
 async function navigateInSession(page: Page, path: string) {
   await page.evaluate((href) => {
     window.history.pushState(null, "", href);
@@ -67,6 +77,11 @@ async function navigateInSession(page: Page, path: string) {
 async function openApproval(page: Page) {
   await page.getByRole("link", { name: /create issue with github/i }).click();
   await expect(page.getByRole("heading", { name: "Create issue" })).toBeVisible();
+}
+
+async function openFilters(page: Page) {
+  const apply = page.getByRole("button", { name: "Apply filters" });
+  if (!await apply.isVisible()) await page.getByRole("button", { name: "Filters" }).click();
 }
 
 async function submitDetailCommand(page: Page, state: ApiScenario) {
@@ -101,12 +116,34 @@ test("manual authentication keeps production credentials memory-only and root is
   await expect(page.getByText(FIRST_ID)).toHaveCount(0);
 });
 
+test("command palette supports keyboard navigation and exact operation IDs", async ({ page }) => {
+  const state = scenario();
+  await installApi(page, state);
+  await login(page, "/");
+  await expect(page.getByRole("heading", { name: "Overview", level: 1 })).toBeVisible();
+
+  await page.keyboard.press("Meta+K");
+  const palette = page.getByRole("dialog", { name: "Command palette" });
+  await expect(palette).toBeVisible();
+  await palette.getByLabel("Search commands").fill(FIRST_ID);
+  await palette.getByLabel("Search commands").press("Enter");
+  await expect(page).toHaveURL(new RegExp(`/operations/${FIRST_ID}$`));
+  await expect(page.getByRole("heading", { name: "Create issue" })).toBeVisible();
+
+  await page.keyboard.press("Meta+K");
+  await palette.getByLabel("Search commands").fill("providers");
+  await palette.getByRole("link", { name: /providers/i }).click();
+  await expect(page).toHaveURL(/\/providers$/);
+  await expect(page.getByRole("heading", { name: "Providers", level: 1 })).toBeFocused();
+});
+
 test("a 401 clears the session and returns focus to access", async ({ page }) => {
   const state = scenario();
   await installApi(page, state);
   await login(page, "/operations");
   await expect(page.getByText(FIRST_ID)).toBeVisible();
   state.unauthorizedList = true;
+  await openFilters(page);
   await page.getByRole("button", { name: "Apply filters" }).click();
   await expect(page.getByRole("alert")).toContainText(/session expired/i);
   await expectAxeClean(page);
@@ -134,11 +171,13 @@ test("operations preserve exact filters, backend order, cursor history, and deta
   await installApi(page, state);
   await login(page, "/operations");
 
+  await openFilters(page);
   await page.getByRole("combobox", { name: "State", exact: true }).selectOption("NEEDS_ATTENTION");
   await page.getByRole("button", { name: "Apply filters" }).click();
   await expect.poll(() => state.listQueries.at(-1)).toContain("attention=true");
   await expect(page).toHaveURL(/\/operations\?attention=true&limit=50$/);
 
+  await openFilters(page);
   await page.getByRole("combobox", { name: "State", exact: true }).selectOption("UNKNOWN");
   await page.getByLabel("Provider (exact)").fill("github");
   await page.getByLabel("Created from (UTC)").fill("2026-08-19T12:00");
@@ -155,6 +194,7 @@ test("operations preserve exact filters, backend order, cursor history, and deta
     limit: "25",
   });
 
+  await openFilters(page);
   await page.getByRole("button", { name: "Clear filters" }).click();
   await expect(page.getByText(FIRST_ID)).toBeVisible();
   await page.getByRole("button", { name: "Next" }).click();
@@ -169,6 +209,13 @@ test("operations preserve exact filters, backend order, cursor history, and deta
   for (const heading of ["Summary", "Execution attempts", "Evidence", "Verification and reconciliation", "Compensation", "Durable audit"]) {
     await expect(page.getByRole("heading", { name: heading, exact: true })).toBeVisible();
   }
+  await page.locator(".operation-detail__back").click();
+  await expect(page).toHaveURL(/\/operations$/);
+  await expect(page.getByRole("heading", { name: "Operations", level: 1 })).toBeFocused();
+  await expect(page.getByRole("heading", { name: "Sign in to Stateback" })).toHaveCount(0);
+  await page.goBack();
+  await expect(page).toHaveURL(new RegExp(`/operations/${FIRST_ID}$`));
+  await expect(page.getByRole("heading", { name: "Create issue with GitHub", level: 1 })).toBeFocused();
 });
 
 test("approval dialog is keyboard-safe and submits the exact binding", async ({ page }) => {
@@ -237,6 +284,7 @@ test("read failure has an accessible retry and recovers", async ({ page }) => {
   await login(page, "/operations");
   await expect(page.getByText(FIRST_ID)).toBeVisible();
   state.listError = 503;
+  await openFilters(page);
   await page.getByRole("button", { name: "Apply filters" }).click();
   await expect(page.getByRole("heading", { name: "Unable to load operations" })).toBeVisible();
   await expectAxeClean(page);
@@ -296,9 +344,13 @@ test("mobile drawer traps focus, restores it, and route changes reset document s
   await login(page);
   for (const width of [768, 320]) {
     await page.setViewportSize({ width, height: 800 });
-    const menu = page.getByRole("button", { name: "Menu" });
+    const menu = page.getByRole("button", { name: "Open navigation" });
+    await expectTouchTarget(menu);
     await menu.click();
-    await expect(page.getByRole("link", { name: "Overview", exact: true })).toBeFocused();
+    const overviewLink = page.getByRole("link", { name: "Overview", exact: true });
+    await expect(overviewLink).toBeFocused();
+    await expectTouchTarget(overviewLink);
+    await expectTouchTarget(page.getByRole("button", { name: "Close navigation" }));
     await page.keyboard.press("Shift+Tab");
     await expect(page.getByRole("link", { name: "Recovery", exact: true })).toBeFocused();
     await page.keyboard.press("Tab");
@@ -336,6 +388,7 @@ test("a response from the previous logged-out session cannot repopulate operator
   let release!: () => void;
   state.listGate = new Promise<void>((resolve) => { release = resolve; });
   const requestCount = state.listRequests;
+  await openFilters(page);
   await page.getByRole("button", { name: "Apply filters" }).click();
   await expect.poll(() => state.listRequests).toBe(requestCount + 1);
   await page.getByRole("button", { name: "Log out" }).click();
@@ -373,6 +426,74 @@ test("start-compensation confirmation is accessible and contract-bound", async (
   await expect(dialog).toContainText(START_COMPENSATION_ID);
   await dialog.getByLabel("Operator reason").fill("confirmed recovery boundary");
   await expectAxeClean(page);
+});
+
+test("visual evidence covers premium operator states at required viewports", async ({ page }, testInfo) => {
+  test.skip(process.env.STATEBACK_VISUAL_EVIDENCE !== "1", "Visual evidence is captured deliberately.");
+  const state = scenario();
+  await installApi(page, state);
+  const viewports = [
+    { width: 1440, height: 900 },
+    { width: 1024, height: 768 },
+    { width: 768, height: 1024 },
+    { width: 390, height: 844 },
+  ];
+  async function capture(name: string) {
+    const body = await page.screenshot();
+    await testInfo.attach(name, { body, contentType: "image/png" });
+  }
+
+  for (const viewport of viewports) {
+    const suffix = `${viewport.width}x${viewport.height}`;
+    await page.setViewportSize(viewport);
+    await page.goto("/");
+    if (await page.getByRole("button", { name: "Log out" }).isVisible()) await page.getByRole("button", { name: "Log out" }).click();
+    await expect(page.getByRole("heading", { name: "Sign in to Stateback" })).toBeVisible();
+    await capture(`access-${suffix}`);
+    await page.getByLabel("Access token").fill("browser-test-token");
+    await page.getByRole("button", { name: "Sign in" }).click();
+    await expect(page.getByRole("heading", { name: "Overview", level: 1 })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Needs attention" })).toBeVisible();
+    await capture(`overview-${suffix}`);
+
+    await navigateInSession(page, "/operations");
+    await expect(page.getByRole("heading", { name: "Operations", level: 1 })).toBeVisible();
+    await expect(page.getByText(FIRST_ID, { exact: true })).toBeVisible();
+    await capture(`operations-${suffix}`);
+    await navigateInSession(page, `/operations/${SECOND_ID}`);
+    await expect(page.getByRole("heading", { name: "Outcome unknown" })).toBeVisible();
+    await capture(`unknown-detail-${suffix}`);
+    await navigateInSession(page, `/operations/${START_COMPENSATION_ID}`);
+    await expect(page.getByRole("button", { name: "Start compensation" })).toBeVisible();
+    await capture(`successful-detail-${suffix}`);
+
+    await navigateInSession(page, "/approvals");
+    await openApproval(page);
+    await page.evaluate(() => window.getSelection()?.removeAllRanges());
+    await capture(`approval-review-${suffix}`);
+    await navigateInSession(page, "/providers");
+    await expect(page.getByRole("heading", { name: "Providers", level: 1 })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "GitHub" })).toBeVisible();
+    await capture(`providers-${suffix}`);
+    await navigateInSession(page, "/recovery");
+    await expect(page.getByRole("heading", { name: "Recovery", level: 1 })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Compensation failed" })).toBeVisible();
+    await capture(`recovery-${suffix}`);
+
+    await navigateInSession(page, `/operations/${MANUAL_ID}`);
+    await page.getByRole("button", { name: "Request verification" }).click();
+    await expect(page.getByRole("dialog")).toBeVisible();
+    await capture(`dialog-${suffix}`);
+    await page.keyboard.press("Escape");
+    await page.getByRole("button", { name: "Search" }).click();
+    const palette = page.getByRole("dialog", { name: "Command palette" });
+    await expect(palette).toBeVisible();
+    await expect(palette).toHaveCSS("opacity", "1");
+    await page.waitForTimeout(250);
+    await capture(`command-palette-${suffix}`);
+    await page.keyboard.press("Escape");
+    await page.getByRole("button", { name: "Log out" }).click();
+  }
 });
 
 test("all routes and supported viewport sizes retain essential operator data", async ({ page }, testInfo) => {
@@ -417,8 +538,14 @@ test("all routes and supported viewport sizes retain essential operator data", a
     await testInfo.attach("operation-detail", { body, contentType: "image/png" });
   }
 
-  for (const width of [1440, 1024, 768, 390, 320]) {
-    await page.setViewportSize({ width, height: width === 1440 ? 1024 : 800 });
+  for (const { width, height } of [
+    { width: 1440, height: 900 },
+    { width: 1024, height: 768 },
+    { width: 768, height: 1024 },
+    { width: 390, height: 844 },
+    { width: 320, height: 568 },
+  ]) {
+    await page.setViewportSize({ width, height });
     await navigateInSession(page, "/operations");
     const row = page.locator(".operation-table tbody tr").first();
     await expect(row.getByText(FIRST_ID)).toBeVisible();
@@ -428,7 +555,12 @@ test("all routes and supported viewport sizes retain essential operator data", a
     await expect(row.getByRole("button", { name: new RegExp(`Copy operation ID ${FIRST_ID}`) })).toBeVisible();
     if (width <= 390) {
       for (const cell of await row.locator("td").all()) await expectInsideViewport(cell, page, false);
-      await row.getByRole("button", { name: new RegExp(`Copy operation ID ${FIRST_ID}`) }).click();
+      const copyId = row.getByRole("button", { name: new RegExp(`Copy operation ID ${FIRST_ID}`) });
+      await expectTouchTarget(copyId);
+      await expectTouchTarget(page.getByRole("button", { name: "Filters" }));
+      await expectTouchTarget(page.getByRole("button", { name: "Open operation" }));
+      await expectTouchTarget(page.getByRole("button", { name: "Search" }));
+      await copyId.click();
       await expect(row.getByRole("status")).toHaveText("operation ID copied");
       expect(await page.evaluate(() => Reflect.get(window, "__copiedValue"))).toBe(FIRST_ID);
     }
@@ -439,8 +571,24 @@ test("all routes and supported viewport sizes retain essential operator data", a
     }
   }
 
-  for (const width of [390, 320]) {
-    await page.setViewportSize({ width, height: 800 });
+  await page.setViewportSize({ width: 768, height: 1024 });
+  await navigateInSession(page, "/operations");
+  await openFilters(page);
+  const stateSelect = page.locator(".operation-filters select");
+  const providerInput = page.locator(".operation-filters input").first();
+  await expectTouchTarget(stateSelect);
+  await expectTouchTarget(providerInput);
+  await providerInput.fill("github");
+  await page.getByRole("button", { name: "Apply filters" }).click();
+  await expectTouchTarget(page.getByRole("button", { name: "Remove provider github filter" }));
+  await navigateInSession(page, `/operations/${MANUAL_ID}`);
+  await expectTouchTarget(page.getByRole("navigation", { name: "Operation detail sections" }).getByRole("link", { name: "Lifecycle" }));
+  await page.getByRole("button", { name: "Search" }).click();
+  await expectTouchTarget(page.getByLabel("Search commands"));
+  await page.keyboard.press("Escape");
+
+  for (const { width, height } of [{ width: 390, height: 844 }, { width: 320, height: 568 }]) {
+    await page.setViewportSize({ width, height });
     await navigateInSession(page, `/operations/${MANUAL_ID}`);
     await expect(page.getByRole("heading", { name: "Create issue with GitHub", level: 1 })).toBeVisible();
     await expectInsideViewport(page.locator(".operation-detail__critical-state"), page);

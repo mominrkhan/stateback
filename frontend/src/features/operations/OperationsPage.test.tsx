@@ -70,9 +70,11 @@ test("filter navigation is deterministic and separate from exact-ID navigation",
   const navigate = vi.fn();
   render(<OperationsPage client={clientWithList(vi.fn().mockResolvedValue(page([])))} search="" navigate={navigate} />);
   await screen.findByText("No operations yet");
+  fireEvent.click(screen.getByRole("button", { name: "Filters" }));
   fireEvent.change(screen.getByLabelText("State"), { target: { value: "NEEDS_ATTENTION" } });
   fireEvent.click(screen.getByRole("button", { name: "Apply filters" }));
   expect(navigate).toHaveBeenCalledWith("/operations?attention=true&limit=50");
+  fireEvent.click(screen.getByRole("button", { name: "Filters" }));
   fireEvent.change(screen.getByLabelText("State"), { target: { value: "UNKNOWN" } });
   fireEvent.change(screen.getByLabelText("Provider (exact)"), { target: { value: " github " } });
   fireEvent.change(screen.getByLabelText("Results per page"), { target: { value: "20" } });
@@ -81,6 +83,20 @@ test("filter navigation is deterministic and separate from exact-ID navigation",
   fireEvent.change(screen.getByLabelText("Exact operation ID"), { target: { value: "opaque:id" } });
   fireEvent.click(screen.getByRole("button", { name: "Open operation" }));
   expect(navigate).toHaveBeenLastCalledWith("/operations/opaque%3Aid");
+});
+
+test("active filter chips remove only their own URL field", async () => {
+  const navigate = vi.fn();
+  render(<OperationsPage
+    client={clientWithList(vi.fn().mockResolvedValue(page([])))}
+    search="?state=UNKNOWN&provider=github&created_from=2026-08-19T12%3A00%3A00.000Z&created_to=2026-08-20T12%3A00%3A00.000Z&limit=20"
+    navigate={navigate}
+  />);
+  await screen.findByText("No operations match these filters");
+  fireEvent.click(screen.getByRole("button", { name: "Remove provider github filter" }));
+  expect(navigate).toHaveBeenCalledWith("/operations?state=UNKNOWN&created_from=2026-08-19T12%3A00%3A00.000Z&created_to=2026-08-20T12%3A00%3A00.000Z&limit=20");
+  expect(screen.getByRole("button", { name: "Remove created from filter" })).toBeVisible();
+  expect(screen.getByRole("button", { name: "Remove created to filter" })).toBeVisible();
 });
 
 test("filter change aborts the old read and ignores its late result", async () => {

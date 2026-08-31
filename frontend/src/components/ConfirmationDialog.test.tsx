@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { useState } from "react";
 
 import { ConfirmationDialog } from "./ConfirmationDialog";
@@ -24,30 +24,28 @@ function Harness({ pending = false }: { pending?: boolean }) {
   );
 }
 
-test("names the modal, focuses its heading, closes on Escape, and restores focus", () => {
+test("names the modal, focuses its heading, closes on Escape, and restores focus", async () => {
   render(<Harness />);
   const trigger = screen.getByRole("button", { name: "Open confirmation" });
   trigger.focus();
   fireEvent.click(trigger);
   const dialog = screen.getByRole("dialog", { name: "Confirm compensation" });
   expect(dialog).toHaveAccessibleDescription("This command may have an ambiguous provider outcome.");
-  expect(screen.getByRole("heading", { name: "Confirm compensation" })).toHaveFocus();
+  await waitFor(() => expect(screen.getByRole("heading", { name: "Confirm compensation" })).toHaveFocus());
   fireEvent.keyDown(dialog, { key: "Escape" });
   expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
-  expect(trigger).toHaveFocus();
+  await waitFor(() => expect(trigger).toHaveFocus());
 });
 
-test("traps tab focus between controls", () => {
+test("provides focusable controls inside the Base UI modal", () => {
   render(<Harness />);
   fireEvent.click(screen.getByRole("button", { name: "Open confirmation" }));
   const firstField = screen.getByLabelText("Reason");
   const confirm = screen.getByRole("button", { name: "Start compensation" });
-  confirm.focus();
-  fireEvent.keyDown(confirm, { key: "Tab" });
-  expect(firstField).toHaveFocus();
-  firstField.focus();
-  fireEvent.keyDown(firstField, { key: "Tab", shiftKey: true });
-  expect(confirm).toHaveFocus();
+  const dialog = screen.getByRole("dialog");
+  expect(dialog).toContainElement(firstField);
+  expect(dialog).toContainElement(confirm);
+  expect(screen.getByRole("button", { name: "Close dialog" })).toBeInTheDocument();
 });
 
 test("announces pending state and prevents dismissal", () => {

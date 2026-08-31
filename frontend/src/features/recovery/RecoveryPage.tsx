@@ -1,7 +1,10 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useMemo, useState } from "react";
 
 import type { OperatorClient } from "../../api/client";
+import { queryRead } from "../../api/queryRead";
 import type { ActionKey, Operation, Reconstruction } from "../../api/types";
+import { OperatorQueryBoundary } from "../../app/OperatorQueryBoundary";
 import { ActionGate, ACTION_LABELS } from "../../components/ActionGate";
 import { CommandOutcome } from "../../components/CommandOutcome";
 import { ConfirmationDialog } from "../../components/ConfirmationDialog";
@@ -22,14 +25,6 @@ const RECOVERY_QUEUES = [
 
 const DEFAULT_CREATE_ABORT = () => new AbortController();
 const DEFAULT_RELEASE_ABORT = () => undefined;
-
-interface RecoveryData {
-  queues: Record<string, Operation[]>;
-  loading: boolean;
-  error: string | null;
-}
-
-const INITIAL_DATA: RecoveryData = { queues: {}, loading: true, error: null };
 
 export interface RecoveryPageProps {
   client: OperatorClient;
@@ -62,7 +57,11 @@ function outcomeKind(state: CommandState): Parameters<typeof CommandOutcome>[0][
   return "error";
 }
 
-export function RecoveryPage({
+export function RecoveryPage(props: RecoveryPageProps) {
+  return <OperatorQueryBoundary><RecoveryContent {...props} /></OperatorQueryBoundary>;
+}
+
+function RecoveryContent({
   client,
   attemptRegistry = sessionCommandAttempts,
   createAbortController = DEFAULT_CREATE_ABORT,
@@ -71,83 +70,48 @@ export function RecoveryPage({
   isCurrentGeneration = () => true,
 }: RecoveryPageProps) {
   const commandController = useMemo(() => new CommandController(client, { registry: attemptRegistry }), [client, attemptRegistry]);
-  const activeQueueRead = useRef<AbortController | null>(null);
-  const activeDetailRead = useRef<AbortController | null>(null);
-  const queueGeneration = useRef(0);
-  const detailGeneration = useRef(0);
-  const [data, setData] = useState<RecoveryData>(INITIAL_DATA);
-  const [detail, setDetail] = useState<Reconstruction | null>(null);
-  const [detailLoading, setDetailLoading] = useState(false);
-  const [detailError, setDetailError] = useState<string | null>(null);
+  const queryClient = useQueryClient();
+  const [selectedOperationId, setSelectedOperationId] = useState<string | null>(null);
   const [selectedAction, setSelectedAction] = useState<ActionKey | null>(null);
   const [reason, setReason] = useState("");
   const [showValidation, setShowValidation] = useState(false);
   const [commandState, setCommandState] = useState<Readonly<CommandState>>(commandController.state);
   const [abandonAcknowledged, setAbandonAcknowledged] = useState(false);
 
-  async function loadQueues() {
-    activeQueueRead.current?.abort();
-    const controller = createAbortController();
-    activeQueueRead.current = controller;
-    const generation = ++queueGeneration.current;
-    const startingSession = sessionGeneration;
-    setData((current) => ({ ...current, loading: true, error: null }));
-    try {
-      const pages = await Promise.all(RECOVERY_QUEUES.map((queue) => client.list({ state: queue.state, limit: 50 }, controller.signal)));
-      if (controller.signal.aborted || generation !== queueGeneration.current || !isCurrentGeneration(startingSession)) return;
-      setData({
-        queues: Object.fromEntries(RECOVERY_QUEUES.map((queue, index) => [queue.state, pages[index].items])),
-        loading: false,
-        error: null,
-      });
-    } catch (cause) {
-      if (controller.signal.aborted || generation !== queueGeneration.current || !isCurrentGeneration(startingSession)) return;
-      setData((current) => ({ ...current, loading: false, error: cause instanceof Error ? cause.message : "Unable to load recovery queues" }));
-    } finally {
-      releaseAbortController(controller);
-      if (activeQueueRead.current === controller) activeQueueRead.current = null;
-    }
-  }
-
-  useEffect(() => {
-    void loadQueues();
-    return () => {
-      activeQueueRead.current?.abort();
-      activeDetailRead.current?.abort();
-      queueGeneration.current += 1;
-      detailGeneration.current += 1;
-    };
-  }, [client, sessionGeneration]);
+  const queuesQuery = useQuery({
+    queryKey: ["operator", "recovery", sessionGeneration],
+    queryFn: ({ signal }) => queryRead(signal, createAbortController, releaseAbortController, async (readSignal) => {
+      const pages = await Promise.all(RECOVERY_QUEUES.map((queue) => client.list({ state: queue.state, limit: 50 }, readSignal)));
+      if (!isCurrentGeneration(sessionGeneration)) throw new DOMException("Session changed", "AbortError");
+      return Object.fromEntries(RECOVERY_QUEUES.map((queue, index) => [queue.state, pages[index].items])) as Record<string, Operation[]>;
+    }),
+  });
+  const detailQuery = useQuery({
+    queryKey: ["operator", "operation", selectedOperationId],
+    enabled: selectedOperationId !== null,
+    queryFn: ({ signal }) => queryRead(signal, createAbortController, releaseAbortController, (readSignal) => client.reconstruct(selectedOperationId!, readSignal)),
+  });
+  const detail = detailQuery.data ?? null;
+  const detailError = detailQuery.error instanceof Error ? detailQuery.error.message : detailQuery.error ? "Unable to load authoritative reconstruction" : null;
+  const queueError = queuesQuery.error instanceof Error ? queuesQuery.error.message : queuesQuery.error ? "Unable to load recovery queues" : null;
 
   useEffect(() => commandController.subscribe((state) => {
     setCommandState(state);
-    if (state.reconstruction) setDetail(state.reconstruction);
-    if (state.phase === "accepted" || state.phase === "authoritative-reloaded") void loadQueues();
-  }), [commandController]);
+    if (state.reconstruction) queryClient.setQueryData(["operator", "operation", state.reconstruction.operation.operation_id], state.reconstruction);
+    if (state.phase === "accepted" || state.phase === "authoritative-reloaded" || state.phase === "conflict") {
+      void Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["operator", "recovery"] }),
+        queryClient.invalidateQueries({ queryKey: ["operator", "operations"] }),
+        queryClient.invalidateQueries({ queryKey: ["operator", "approvals"] }),
+        queryClient.invalidateQueries({ queryKey: ["operator", "overview"] }),
+      ]);
+    }
+  }), [commandController, queryClient]);
 
-  async function selectOperation(operationId: string) {
-    activeDetailRead.current?.abort();
-    const controller = createAbortController();
-    activeDetailRead.current = controller;
-    const generation = ++detailGeneration.current;
-    const startingSession = sessionGeneration;
+  function selectOperation(operationId: string) {
     setSelectedAction(null);
     setReason("");
-    setDetail(null);
-    setDetailError(null);
-    setDetailLoading(true);
-    try {
-      const reconstruction = await client.reconstruct(operationId, controller.signal);
-      if (controller.signal.aborted || generation !== detailGeneration.current || !isCurrentGeneration(startingSession)) return;
-      setDetail(reconstruction);
-    } catch (cause) {
-      if (controller.signal.aborted || generation !== detailGeneration.current || !isCurrentGeneration(startingSession)) return;
-      setDetailError(cause instanceof Error ? cause.message : "Unable to load authoritative reconstruction");
-    } finally {
-      if (generation === detailGeneration.current) setDetailLoading(false);
-      releaseAbortController(controller);
-      if (activeDetailRead.current === controller) activeDetailRead.current = null;
-    }
+    setSelectedOperationId(operationId);
   }
 
   async function confirmCommand() {
@@ -173,14 +137,14 @@ export function RecoveryPage({
       <aside aria-label="Recovery safety notice">
         <strong>Unknown is not failure.</strong> An operation in UNKNOWN is not included as actionable here. Compensation is not universal rollback.
       </aside>
-      {data.loading && Object.keys(data.queues).length === 0 ? (
+      {queuesQuery.isPending ? (
         <DefensiveState kind="loading" title="Loading recovery queues" />
-      ) : data.error ? (
-        <DefensiveState kind="error" title="Unable to load recovery queues" onRetry={() => void loadQueues()}><p>{data.error}</p></DefensiveState>
+      ) : queueError ? (
+        <DefensiveState kind="error" title="Unable to load recovery queues" onRetry={() => void queuesQuery.refetch()}><p>{queueError}</p></DefensiveState>
       ) : (
         <div className="recovery-queues">
           {RECOVERY_QUEUES.map((queue) => {
-            const operations = data.queues[queue.state] ?? [];
+            const operations = queuesQuery.data?.[queue.state] ?? [];
             return (
               <section key={queue.state} aria-labelledby={`queue-${queue.state}`}>
                 <h2 id={`queue-${queue.state}`}>{queue.title}</h2>
@@ -189,7 +153,7 @@ export function RecoveryPage({
                   <ul>
                     {operations.map((operation) => (
                       <li key={operation.operation_id}>
-                        <button type="button" className="primitive-button" onClick={() => void selectOperation(operation.operation_id)}>
+                        <button type="button" className="primitive-button" onClick={() => selectOperation(operation.operation_id)}>
                           {operation.intent.effect.provider} / {operation.intent.effect.action} — {operation.operation_id}
                         </button>
                         <StateBadge state={operation.state} />
@@ -206,8 +170,8 @@ export function RecoveryPage({
 
       <section aria-labelledby="recovery-controls-heading">
         <h2 id="recovery-controls-heading">Selected recovery operation</h2>
-        {detailLoading ? <DefensiveState kind="loading" title="Loading authoritative reconstruction" /> : detailError ? (
-          <DefensiveState kind="error" title="Unable to load recovery controls"><p>{detailError}</p></DefensiveState>
+        {detailQuery.isFetching && !detail ? <DefensiveState kind="loading" title="Loading authoritative reconstruction" /> : detailError ? (
+          <DefensiveState kind="error" title="Unable to load recovery controls" onRetry={() => void detailQuery.refetch()}><p>{detailError}</p></DefensiveState>
         ) : !detail ? <p>Select a queued operation to inspect backend-authorized controls.</p> : (
           <>
             <CopyableId value={detail.operation.operation_id} label="operation ID" />

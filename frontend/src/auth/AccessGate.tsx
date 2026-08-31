@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
+import { Eye, EyeOff, KeyRound, ShieldCheck } from "lucide-react";
 
 import { useAuthSession } from "./AuthSession";
 
@@ -38,13 +39,14 @@ export function AccessGate() {
 
   return (
     <main id="main-content" className="login" aria-labelledby="access-heading">
-      <p className="login__brand">STATEBACK</p>
-      <h1 ref={headingRef} id="access-heading" tabIndex={-1}>Sign in to Stateback</h1>
-      <p>Enter the access token provided by your Stateback deployment.</p>
+      <div className="login__brand"><span className="stateback-mark" aria-hidden="true"><i /><i /><i /></span><span>Stateback</span></div>
+      <div className="login__heading-icon"><ShieldCheck size={22} aria-hidden="true" /></div>
+      <h1 ref={headingRef} id="access-heading" data-page-heading tabIndex={-1}>Sign in to Stateback</h1>
+      <p>Authenticate with the access token issued by your Stateback deployment.</p>
       {accessMessage && <p role="alert">{accessMessage}</p>}
       {error && <p className="login__error" role="alert">{error}</p>}
       <form onSubmit={(event) => void submit(event)} aria-busy={submitting}>
-        <label htmlFor="access-token">Access token</label>
+        <label htmlFor="access-token"><KeyRound size={14} aria-hidden="true" /> Access token</label>
         <span>
           <input
             id="access-token"
@@ -57,12 +59,13 @@ export function AccessGate() {
           />
           <button
             type="button"
+            aria-label={showToken ? "Hide token" : "Show token"}
             aria-controls="access-token"
             aria-pressed={showToken}
             disabled={submitting}
             onClick={() => setShowToken((shown) => !shown)}
           >
-            {showToken ? "Hide token" : "Show token"}
+            {showToken ? <><EyeOff size={15} /> Hide</> : <><Eye size={15} /> Show</>}
           </button>
         </span>
         <button className="primitive-button primitive-button--primary" type="submit" disabled={submitting}>

@@ -1,4 +1,6 @@
 import { useEffect, useState, type FormEvent } from "react";
+import { Popover } from "@base-ui/react/popover";
+import { CircleHelp, ListFilter, ShieldAlert, X } from "lucide-react";
 
 import { OPERATION_STATES } from "../../api/types";
 import type { OperationFilters as ApiOperationFilters } from "../../api/query";
@@ -85,10 +87,12 @@ interface OperationFiltersProps {
   values: OperationsFilterValues;
   invalidSearch?: boolean;
   onApply: (filters: OperationsFilterValues) => void;
+  onRemove: (key: "state" | "attention" | "provider" | "createdFrom" | "createdTo") => void;
   onClear: () => void;
 }
 
-export function OperationFilters({ values, invalidSearch = false, onApply, onClear }: OperationFiltersProps) {
+export function OperationFilters({ values, invalidSearch = false, onApply, onRemove, onClear }: OperationFiltersProps) {
+  const [filtersOpen, setFiltersOpen] = useState(false);
   const [state, setState] = useState(values.attention ? "NEEDS_ATTENTION" : values.state ?? "");
   const [provider, setProvider] = useState(values.provider ?? "");
   const [createdFrom, setCreatedFrom] = useState(toLocalInput(values.createdFrom));
@@ -127,6 +131,7 @@ export function OperationFilters({ values, invalidSearch = false, onApply, onCle
       return;
     }
     setError(null);
+    setFiltersOpen(false);
     onApply({
       ...(state === "NEEDS_ATTENTION" ? { attention: true } : state ? { state } : {}),
       ...(normalizedProvider ? { provider: normalizedProvider } : {}),
@@ -137,8 +142,16 @@ export function OperationFilters({ values, invalidSearch = false, onApply, onCle
   }
 
   return (
-    <form className="operation-filters" aria-label="Operation filters" onSubmit={submit}>
+    <div className="filter-toolbar" aria-label="Operation filters">
       {invalidSearch && <p role="alert">Unsupported operation filters were ignored.</p>}
+      <div className="filter-toolbar__quick">
+        <button type="button" className={`filter-chip${values.attention ? " filter-chip--active" : ""}`} onClick={() => onApply({ limit: values.limit, attention: true })}><ShieldAlert size={14} />Needs attention</button>
+        <button type="button" className={`filter-chip${values.state === "UNKNOWN" ? " filter-chip--active" : ""}`} onClick={() => onApply({ limit: values.limit, state: "UNKNOWN" })}><CircleHelp size={14} />Unknown</button>
+        <button type="button" className={`filter-chip${values.state === "AWAITING_APPROVAL" ? " filter-chip--active" : ""}`} onClick={() => onApply({ limit: values.limit, state: "AWAITING_APPROVAL" })}>Awaiting approval</button>
+      </div>
+      <Popover.Root open={filtersOpen} onOpenChange={setFiltersOpen}>
+        <Popover.Trigger className="primitive-button"><ListFilter size={15} aria-hidden="true" /> Filters</Popover.Trigger>
+        <Popover.Portal><Popover.Positioner sideOffset={8} align="end"><Popover.Popup className="filter-popover"><Popover.Arrow className="filter-popover__arrow" /><div className="filter-popover__header"><div><p className="eyebrow">DISPLAY CONTROLS</p><Popover.Title>Filter operations</Popover.Title></div><Popover.Close className="icon-button" aria-label="Close filters"><X size={16} /></Popover.Close></div><form className="operation-filters" onSubmit={submit}>
       {error && <p role="alert" id="operation-filter-error">{error}</p>}
       <label>
         State
@@ -166,9 +179,12 @@ export function OperationFilters({ values, invalidSearch = false, onApply, onCle
       </label>
       <div className="operation-filters__actions">
         <button type="submit" className="primitive-button primitive-button--primary">Apply filters</button>
-        <button type="button" className="primitive-button" onClick={onClear}>Clear filters</button>
+        <button type="button" className="primitive-button" onClick={() => { setFiltersOpen(false); onClear(); }}>Clear filters</button>
       </div>
-    </form>
+        </form></Popover.Popup></Popover.Positioner></Popover.Portal>
+      </Popover.Root>
+      {(values.attention || values.state || values.provider || values.createdFrom || values.createdTo) && <div className="active-filters"><span>Active:</span>{values.attention && <button type="button" aria-label="Remove Needs attention filter" onClick={() => onRemove("attention")}>Needs attention <X size={12} /></button>}{values.state && <button type="button" aria-label={`Remove ${operationStateLabel(values.state)} filter`} onClick={() => onRemove("state")}>{operationStateLabel(values.state)} <X size={12} /></button>}{values.provider && <button type="button" aria-label={`Remove provider ${values.provider} filter`} onClick={() => onRemove("provider")}>Provider: {values.provider} <X size={12} /></button>}{values.createdFrom && <button type="button" aria-label="Remove created from filter" onClick={() => onRemove("createdFrom")}>From: <code>{values.createdFrom}</code> <X size={12} /></button>}{values.createdTo && <button type="button" aria-label="Remove created to filter" onClick={() => onRemove("createdTo")}>To: <code>{values.createdTo}</code> <X size={12} /></button>}<button type="button" onClick={onClear}>Clear all</button></div>}
+    </div>
   );
 }
 

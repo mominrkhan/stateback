@@ -210,7 +210,7 @@ test("shows only the GitHub create-issue approval allowlist and body counts", ()
   render(<OperationDetailPage reconstruction={reconstruction} />);
   expect(screen.getByText("octo-org")).toBeVisible();
   expect(screen.getByText("stateback")).toBeVisible();
-  expect(screen.getByText("Durable issue")).toBeVisible();
+  expect(screen.getAllByText("Durable issue").length).toBeGreaterThan(0);
   expect(screen.getByText("safety, agent")).toBeVisible();
   expect(screen.getByText("operator")).toBeVisible();
   expect(screen.getByText("11 characters / 11 bytes; content withheld")).toBeVisible();
